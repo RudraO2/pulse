@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.runtime/
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+.DS_Store
+# Swytchcode local cache + credentials never leave the machine
+.swytchcode/workspace.json
+.swytchcode/*.lock
+.swytchcode/integrations/*.lock
+.swytchcode/mcp.pid

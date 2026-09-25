@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist/server-build",
+    "noEmit": false
+  },
+  "include": ["src", "guardrails.config.ts"]
+}

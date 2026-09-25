@@ -1,0 +1,164 @@
+import { bus } from './bus.js'
+import { runCommunityAgent, type MemberSignal } from './agent/community.js'
+import { handleModReply } from './agent/learn.js'
+import { communityModel } from './agent/models.js'
+import { heuristicFrustration, isNoise, isQuestionLike, wantsHuman } from './agent/triage.js'
+import { createBatcher, type Batcher } from './conversation/batcher.js'
+import { readHistory } from './conversation/memory.js'
+import { channels, post } from './core/channels.js'
+import { modsChannel } from './core/mods.js'
+import { startRun } from './core/runs.js'
+import { pendingByThread, waitingQuestions } from './core/state-docs.js'
+import { markUsed, searchKnowledge } from './kb/knowledge.js'
+import type { InboundMessage } from './shared/events.js'
+import { getDb } from './store/db.js'
+import { insertMessage, insertQuestion, markAnswered, searchQuestions } from './store/repo.js'
+
+// Inbound → store → batch window → Community Agent. The batching, backlog
+// drain and per-chat serial lanes are the WhatsApp bot's patterns (batcher.ts).
+
+let batcher: Batcher | undefined
+
+function asksToday(m: InboundMessage): number {
+  const since = Date.now() - 12 * 3600_000
+  const r = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM messages WHERE platform = ? AND user_id = ? AND question_like = 1 AND ts >= ? AND simulated = ?')
+    .get(m.platform, m.userId, since, m.simulated ? 1 : 0) as { n: number }
+  return Number(r.n)
+}
+
+function isNewMember(m: InboundMessage): boolean {
+  if (m.joined) return true
+  const r = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM messages WHERE platform = ? AND user_id = ? AND simulated = ?')
+    .get(m.platform, m.userId, m.simulated ? 1 : 0) as { n: number }
+  return Number(r.n) <= 1
+}
+
+function signalsFor(batch: InboundMessage[]): MemberSignal[] {
+  return batch.map((m) => {
+    const asks = asksToday(m)
+    const past = isQuestionLike(m.text) ? searchQuestions(m.text, { limit: 3 }).filter((q) => q.msgId !== m.msgId && q.score > 3) : []
+    const top = past[0]
+    return {
+      msgId: m.msgId,
+      frustration: Math.max(heuristicFrustration(m.text, asks), wantsHuman(m.text) ? 0.5 : 0),
+      asksToday: asks,
+      isNew: isNewMember(m),
+      repeatOf: top ? { text: top.text, userName: top.userName, answered: false } : undefined,
+    }
+  })
+}
+
+/** Watch a #mods thread; the first organizer reply feeds the learning loop. */
+export function watchModsThread(ts: string): void {
+  const slack = channels.slack
+  const channel = modsChannel()
+  if (!slack || !channel) return
+  slack.watchThread(
+    channel,
+    ts,
+    (reply) => {
+      const p = pendingByThread(ts)
+      if (p) void handleModReply(p.id, { userName: reply.userName, text: reply.text }).catch((e) => bus.emit({ type: 'log', level: 'error', text: `learning loop: ${(e as Error).message}` }))
+    },
+    24 * 3600_000,
+  )
+}
+
+async function fallbackAnswer(batch: InboundMessage[], runId: string): Promise<'answered' | 'silent'> {
+  // No LLM configured/available: answer only confident knowledge-base hits.
+  const target = batch[batch.length - 1]!
+  if (!isQuestionLike(target.text)) return 'silent'
+  const hit = searchKnowledge(target.text, 1)[0]
+  if (!hit || hit.score < 4) return 'silent'
+  const res = await post(target.platform, target.chatId, `${hit.entry.answer}\n\n📎 [${hit.entry.question}](${hit.entry.url})`, {
+    runId,
+    replyToId: target.platform === 'telegram' ? target.msgId : undefined,
+    threadTs: target.platform === 'slack' ? target.threadTs ?? target.msgId : undefined,
+    simulated: target.simulated,
+  })
+  if (res.ok) {
+    markUsed(hit.entry.id, runId)
+    markAnswered(target.platform, target.chatId, [target.msgId], 'bot', runId)
+    return 'answered'
+  }
+  return 'silent'
+}
+
+async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
+  const relevant = batch.filter((m) => m.joined || !isNoise(m.text) || m.addressed)
+  if (!relevant.length) return
+  const target = relevant[relevant.length - 1]!
+  const model = communityModel()
+
+  // Feedback while thinking: Telegram "typing…", Slack 👀 on the question.
+  if (!target.simulated && (target.addressed || isQuestionLike(target.text))) {
+    if (target.platform === 'telegram') void channels.telegram?.typing(target.chatId)
+    if (target.platform === 'slack') void channels.slack?.ack(target.chatId, target.msgId, 'eyes')
+  }
+
+  const run = startRun('community', relevant.map((m) => `${m.userName}: ${m.text}`).join('\n'), {
+    platform: target.platform,
+    chatId: target.chatId,
+    userName: target.userName,
+    simulated: target.simulated,
+  })
+  try {
+    if (!model) {
+      const outcome = await fallbackAnswer(relevant, run.id)
+      run.end(outcome, { summary: 'no LLM configured: knowledge-base fallback' })
+      return
+    }
+    const waiting = waitingQuestions()
+      .filter((p) => p.chatId === target.chatId && p.platform === target.platform)
+      .map((p) => p.question)
+    const result = await runCommunityAgent({
+      run,
+      model,
+      chatKey: key,
+      batch: relevant,
+      history: readHistory(key, 40),
+      signals: signalsFor(relevant),
+      waiting,
+      onModReplyWatch: (ts) => {
+        if (!target.simulated) watchModsThread(ts)
+      },
+    })
+    if (result.error && result.outcome === 'failed') {
+      const outcome = await fallbackAnswer(relevant, run.id)
+      run.end(outcome === 'answered' ? 'answered' : 'failed', { summary: `model error: ${result.error.slice(0, 120)}` })
+      return
+    }
+    run.end(result.outcome, { reply: result.reply })
+  } catch (e) {
+    run.end('failed', { summary: String((e as Error).message).slice(0, 160) })
+  }
+}
+
+export function ingest(msg: InboundMessage): void {
+  const questionLike = !msg.joined && isQuestionLike(msg.text)
+  const fresh = insertMessage(msg, questionLike)
+  if (!fresh) return
+  if (questionLike) insertQuestion({ platform: msg.platform, chatId: msg.chatId, msgId: msg.msgId, userName: msg.userName, text: msg.text, ts: msg.ts, simulated: msg.simulated })
+  bus.emit({ type: 'message.in', msg })
+  batcher?.push(msg)
+}
+
+export function createPipeline(opts: { groupCollectMs?: number; dmCollectMs?: number } = {}): Batcher {
+  batcher = createBatcher({
+    onBatch: (key, batch) => onBatch(key, batch),
+    groupCollectMs: opts.groupCollectMs ?? 3000,
+    dmCollectMs: opts.dmCollectMs ?? 2000,
+    groupMaxWaitMs: 12_000,
+    dmMaxWaitMs: 12_000,
+  })
+  return batcher
+}
+
+/** Re-attach thread watchers for questions still waiting on organizers (after a restart). */
+export function rewatchPending(): void {
+  for (const p of waitingQuestions()) if (p.modsThreadTs && !p.simulated) watchModsThread(p.modsThreadTs)
+}
+
+export const pipelineBatcher = (): Batcher | undefined => batcher

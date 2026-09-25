@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "on_violation": "fail",
+    "evaluation": "pre_execution"
+  },
+  "policies": []
+}

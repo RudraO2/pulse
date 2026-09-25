@@ -1,0 +1,10 @@
+Telemetry is disabled. Run `swytchcode login` or set SWYTCHCODE_TOKEN to enable usage tracking.
+Fetching telegram_v5_0......
+× Failed to fetch provider bundles.
+  Reference ID: SWY-ERR-505AE4
+  This reference ID can be shared with the Swytchcode team for support, or run `swytchcode doctor` to self-diagnose.
+  hint: run 'swytchcode search telegram_v5_0' to find the exact provider name
+running in demo mode (telegram_v5_0 not fetched)
+   run: swytchcode get telegram_v5_0
+2026/09/25 23:35:28 [swytchcode exec] request tool=telegram_v5_0.deletemessage.create {"Authorization":"[REDACTED]","body":{"chat_id":1,"message_id":2}}
+{"error":"tool \"telegram_v5_0.deletemessage.create\" is not configured in this project's tooling.json. Run: swytchcode get telegram_v5_0 && swytchcode add telegram_v5_0.deletemessage.create","category":"not_found","suggested_action":"run: swytchcode list methods to find available tools, or swytchcode add method <canonical_id>","docs_url":"https://docs.swytchcode.com/cli/tools/"}

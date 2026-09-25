@@ -1,0 +1,239 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import type { AddressInfo } from 'node:net'
+import { Hono, type Context } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { createAdaptorServer } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
+import { bus } from '../bus.js'
+import type { StateStore } from './state.js'
+import type { SequencedEvent } from '../shared/events.js'
+
+// HTTP surface: dashboard state, the live event stream (SSE + a long-poll
+// fallback for proxies that buffer SSE, e.g. Cloudflare quick tunnels), the
+// Agent Console, operator actions, and the built SPA.
+// Ported from the WhatsApp bot's server.ts (sseSend / ping / /api/state).
+
+export interface AppHandlers {
+  onConsole?: (text: string) => Promise<unknown>
+  onApproval?: (id: string, decision: 'approve' | 'reject', by: string) => Promise<unknown>
+  onResolveAttention?: (id: string) => Promise<unknown>
+  onDigest?: () => Promise<unknown>
+  onSelftest?: () => Promise<unknown>
+  onSweep?: () => Promise<unknown>
+  onKbSync?: () => Promise<unknown>
+  guardrails?: () => Promise<unknown>
+  audit?: () => Promise<unknown>
+  scenarios?: () => unknown
+  onDemo?: (action: 'play' | 'pause' | 'resume' | 'stop' | 'reset' | 'speed', body: Record<string, unknown>) => Promise<unknown>
+}
+
+export interface AppOptions extends AppHandlers {
+  store: StateStore
+  /** directory with the built dashboard (index.html + assets) */
+  webRoot?: string
+  /** if set, operator actions require this token */
+  adminToken?: string
+  pollTimeoutMs?: number
+  pingMs?: number
+}
+
+const SSE_HEADERS = {
+  'Content-Type': 'text/event-stream; charset=utf-8',
+  'Cache-Control': 'no-store, no-transform',
+  Connection: 'keep-alive',
+  'X-Accel-Buffering': 'no',
+}
+
+export function formatSse(ev: SequencedEvent): string {
+  return `id: ${ev.seq}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`
+}
+
+function clientId(c: Context): string {
+  return (
+    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
+    c.req.header('cf-connecting-ip') ||
+    c.req.header('x-real-ip') ||
+    'local'
+  )
+}
+
+export function createApp(opts: AppOptions): Hono {
+  const { store } = opts
+  const app = new Hono()
+  const startedAt = Date.now()
+  const pollTimeout = opts.pollTimeoutMs ?? 25_000
+  const pingMs = opts.pingMs ?? 20_000
+  const webRoot = opts.webRoot ?? path.resolve('dist', 'web')
+
+  app.onError((err, c) => {
+    console.error('[HTTP]', err)
+    return c.json({ error: String(err?.message || err) }, 500)
+  })
+
+  app.use('/api/*', bodyLimit({ maxSize: 64 * 1024, onError: c => c.json({ error: 'body too large' }, 413) }))
+
+  const requireAdmin = async (c: Context, next: () => Promise<void>) => {
+    if (opts.adminToken) {
+      const tok = c.req.header('x-admin-token') || c.req.query('token')
+      if (tok !== opts.adminToken) return c.json({ error: 'admin token required' }, 401)
+    }
+    await next()
+  }
+
+  async function readJson(c: Context): Promise<Record<string, unknown>> {
+    try {
+      const body = await c.req.json()
+      return body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  // ── health + state ────────────────────────────────────────────────────────
+
+  app.get('/healthz', c => c.json({ ok: true, uptime: Math.round((Date.now() - startedAt) / 1000), seq: bus.currentSeq }))
+
+  app.get('/api/state', c => {
+    c.header('Cache-Control', 'no-store')
+    return c.json(store.snapshot())
+  })
+
+  // ── live stream (SSE) ─────────────────────────────────────────────────────
+
+  app.get('/api/events', c => {
+    const resumeRaw = c.req.header('Last-Event-ID') ?? c.req.query('since')
+    const resumeFrom = resumeRaw !== undefined && resumeRaw !== '' ? Number(resumeRaw) : NaN
+    const enc = new TextEncoder()
+    let cleanup = () => {}
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        let closed = false
+        const send = (s: string) => {
+          if (closed) return
+          try {
+            controller.enqueue(enc.encode(s))
+          } catch {
+            cleanup()
+          }
+        }
+        send(`retry: 3000\nevent: hello\ndata: ${JSON.stringify({ seq: bus.currentSeq })}\n\n`)
+        // Resume: replay what the client missed while it was reconnecting
+        if (Number.isFinite(resumeFrom)) for (const ev of store.eventsSince(resumeFrom)) send(formatSse(ev))
+        const unsubscribe = bus.on(ev => send(formatSse(ev)))
+        const ping = setInterval(() => send(': ping\n\n'), pingMs)
+        cleanup = () => {
+          if (closed) return
+          closed = true
+          clearInterval(ping)
+          unsubscribe()
+          try { controller.close() } catch { /* already closed */ }
+        }
+        c.req.raw.signal?.addEventListener('abort', () => cleanup(), { once: true })
+      },
+      cancel() {
+        cleanup()
+      },
+    })
+    return new Response(stream, { headers: SSE_HEADERS })
+  })
+
+  // ── long-poll fallback ────────────────────────────────────────────────────
+
+  app.get('/api/events/poll', async c => {
+    const since = Number(c.req.query('since') ?? 0)
+    const timeout = Math.min(Number(c.req.query('timeout') ?? pollTimeout), pollTimeout)
+    if (!Number.isFinite(since)) return c.json({ error: 'since must be a number' }, 400)
+    const events = await store.waitForEvents(since, Number.isFinite(timeout) ? timeout : pollTimeout, c.req.raw.signal)
+    c.header('Cache-Control', 'no-store')
+    return c.json({ seq: events.length ? events[events.length - 1]!.seq : Math.max(since, 0), events })
+  })
+
+  // ── operator actions ──────────────────────────────────────────────────────
+
+  const consoleHits = new Map<string, number[]>()
+  const call = async (fn: (() => Promise<unknown>) | undefined, c: Context): Promise<Response> => (fn ? c.json((await fn()) ?? { ok: true }) : c.json({ error: 'not available' }, 503))
+
+  app.post('/api/console', requireAdmin, async c => {
+    if (!opts.onConsole) return c.json({ error: 'console not available' }, 503)
+    const body = await readJson(c)
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    if (!text) return c.json({ error: 'text required' }, 400)
+    if (text.length > 2000) return c.json({ error: 'request too long (max 2000 chars)' }, 400)
+    const who = clientId(c)
+    const now = Date.now()
+    const hits = (consoleHits.get(who) ?? []).filter(t => now - t < 60_000)
+    if (hits.length >= 10) return c.json({ error: 'slow down, try again in a minute' }, 429)
+    consoleHits.set(who, [...hits, now])
+    return c.json((await opts.onConsole(text)) ?? { ok: true })
+  })
+
+  app.post('/api/approvals/:id', requireAdmin, async c => {
+    if (!opts.onApproval) return c.json({ error: 'not available' }, 503)
+    const body = await readJson(c)
+    const decision = body.decision === 'reject' ? 'reject' : 'approve'
+    return c.json((await opts.onApproval((c.req.param('id') ?? ''), decision, 'Organizer (dashboard)')) ?? { ok: true })
+  })
+
+  app.post('/api/attention/:id/resolve', requireAdmin, async c => call(opts.onResolveAttention && (() => opts.onResolveAttention!((c.req.param('id') ?? ''))), c))
+  app.post('/api/digest', requireAdmin, c => call(opts.onDigest, c))
+  app.post('/api/selftest', requireAdmin, c => call(opts.onSelftest, c))
+  app.post('/api/sweep', requireAdmin, c => call(opts.onSweep, c))
+  app.post('/api/kb/sync', requireAdmin, c => call(opts.onKbSync, c))
+  app.get('/api/guardrails', c => call(opts.guardrails, c))
+  app.get('/api/audit', c => call(opts.audit, c))
+  app.get('/api/scenarios', c => c.json(opts.scenarios?.() ?? []))
+
+  app.post('/api/demo/:action', requireAdmin, async c => {
+    if (!opts.onDemo) return c.json({ error: 'demo not available' }, 503)
+    const action = c.req.param('action') ?? ''
+    if (!['play', 'pause', 'resume', 'stop', 'reset', 'speed'].includes(action)) return c.json({ error: 'unknown action' }, 400)
+    const body = await readJson(c)
+    return c.json((await opts.onDemo(action as 'play', body)) ?? { ok: true })
+  })
+
+  app.all('/api/*', c => c.json({ error: 'not found' }, 404))
+
+  // ── dashboard SPA ─────────────────────────────────────────────────────────
+
+  const relRoot = path.relative(process.cwd(), webRoot) || '.'
+  app.use('/*', serveStatic({ root: relRoot }))
+  app.get('*', c => {
+    const index = path.join(webRoot, 'index.html')
+    if (!fs.existsSync(index)) {
+      return c.text('Dashboard not built yet: run `npm run build:web` (API is live at /api/state).', 503)
+    }
+    c.header('Cache-Control', 'no-store')
+    return c.html(fs.readFileSync(index, 'utf-8'))
+  })
+
+  return app
+}
+
+/** Listen on `port`, bumping to the next free port (up to +10) like the WhatsApp dashboard did. */
+export function startServer(app: Hono, basePort: number): Promise<{ port: number; close: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const server = createAdaptorServer({ fetch: app.fetch })
+    let port = basePort
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && port < basePort + 10) {
+        port++
+        console.log(`[HTTP] Port busy, trying ${port}...`)
+        server.listen(port)
+      } else {
+        reject(err)
+      }
+    })
+    server.on('listening', () => {
+      const addr = server.address() as AddressInfo | null
+      const actual = addr?.port ?? port
+      console.log(`[HTTP] Dashboard on http://localhost:${actual}`)
+      resolve({
+        port: actual,
+        close: () => new Promise<void>(res => server.close(() => res())),
+      })
+    })
+    server.listen(port)
+  })
+}

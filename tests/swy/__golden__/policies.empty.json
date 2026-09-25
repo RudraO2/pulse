@@ -1,0 +1,195 @@
+{
+  "defaults": {
+    "on_violation": "fail",
+    "evaluation": "pre_execution"
+  },
+  "policies": [
+    {
+      "id": "no-secrets",
+      "target": [
+        "telegram_v5_0.sendmessage.create",
+        "telegram_v5_0.editmessagetext.create",
+        "slack.chat.postmessage.create",
+        "slack.chat.update.create"
+      ],
+      "when": {
+        "field": "text",
+        "operator": "matches",
+        "value": "(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|swy_key_[A-Za-z0-9_-]{8,}|xox[abposr]-[A-Za-z0-9-]{8,}|xapp-[A-Za-z0-9-]{8,}|sk-[A-Za-z0-9_-]{20,}|re_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{30,}|gsk_[A-Za-z0-9]{20,}|(?:secret|ntn)_[A-Za-z0-9]{30,}|[0-9]{8,10}:[A-Za-z0-9_-]{35})"
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "Outbound message contains a secret-like token (API key / bot token). Redact it before posting."
+      }
+    },
+    {
+      "id": "no-secrets-email",
+      "target": [
+        "resend.email.create"
+      ],
+      "when": {
+        "operator": "any",
+        "conditions": [
+          {
+            "field": "subject",
+            "operator": "matches",
+            "value": "(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|swy_key_[A-Za-z0-9_-]{8,}|xox[abposr]-[A-Za-z0-9-]{8,}|xapp-[A-Za-z0-9-]{8,}|sk-[A-Za-z0-9_-]{20,}|re_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{30,}|gsk_[A-Za-z0-9]{20,}|(?:secret|ntn)_[A-Za-z0-9]{30,}|[0-9]{8,10}:[A-Za-z0-9_-]{35})"
+          },
+          {
+            "field": "html",
+            "operator": "matches",
+            "value": "(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|swy_key_[A-Za-z0-9_-]{8,}|xox[abposr]-[A-Za-z0-9-]{8,}|xapp-[A-Za-z0-9-]{8,}|sk-[A-Za-z0-9_-]{20,}|re_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{30,}|gsk_[A-Za-z0-9]{20,}|(?:secret|ntn)_[A-Za-z0-9]{30,}|[0-9]{8,10}:[A-Za-z0-9_-]{35})"
+          },
+          {
+            "field": "text",
+            "operator": "matches",
+            "value": "(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|swy_key_[A-Za-z0-9_-]{8,}|xox[abposr]-[A-Za-z0-9-]{8,}|xapp-[A-Za-z0-9-]{8,}|sk-[A-Za-z0-9_-]{20,}|re_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{30,}|gsk_[A-Za-z0-9]{20,}|(?:secret|ntn)_[A-Za-z0-9]{30,}|[0-9]{8,10}:[A-Za-z0-9_-]{35})"
+          }
+        ]
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "Outbound message contains a secret-like token (API key / bot token). Redact it before posting."
+      }
+    },
+    {
+      "id": "no-mass-mention",
+      "target": [
+        "slack.chat.postmessage.create",
+        "slack.chat.update.create"
+      ],
+      "when": {
+        "field": "text",
+        "operator": "matches",
+        "value": "<!(channel|everyone|here)>|(^|s)@(channel|everyone|here)\b"
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "Pulse may never mass-mention a channel (@channel / @everyone / @here)."
+      }
+    },
+    {
+      "id": "no-shady-links",
+      "target": [
+        "telegram_v5_0.sendmessage.create",
+        "telegram_v5_0.editmessagetext.create",
+        "slack.chat.postmessage.create",
+        "slack.chat.update.create"
+      ],
+      "when": {
+        "field": "text",
+        "operator": "matches",
+        "value": "(?i)(https?://(bit.ly|tinyurl.com|t.co|goo.gl|is.gd|ow.ly|rb.gy|cutt.ly|shorturl.at|[0-9]{1,3}(.[0-9]{1,3}){3})(/|\b))|javascript:|data:text/html"
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "Shortened, raw-IP or script links are not allowed in community posts."
+      }
+    },
+    {
+      "id": "email-recipients",
+      "target": [
+        "resend.email.create"
+      ],
+      "when": {
+        "field": "to",
+        "operator": "not_in",
+        "value": [
+          "canary@pulse.invalid"
+        ]
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "Pulse can only email allow-listed organizer addresses."
+      }
+    },
+    {
+      "id": "cooldown-telegram",
+      "target": [
+        "telegram_v5_0.sendmessage.create"
+      ],
+      "when": {
+        "field": "chat_id",
+        "operator": "in",
+        "value": [
+          -1000000000001
+        ]
+      },
+      "action": {
+        "type": "RATE_LIMITED",
+        "message": "This chat is cooling down: the agent exceeded its posting rate here."
+      }
+    },
+    {
+      "id": "cooldown-slack",
+      "target": [
+        "slack.chat.postmessage.create"
+      ],
+      "when": {
+        "field": "channel",
+        "operator": "in",
+        "value": [
+          "C0CANARYHOT"
+        ]
+      },
+      "action": {
+        "type": "RATE_LIMITED",
+        "message": "This chat is cooling down: the agent exceeded its posting rate here."
+      }
+    },
+    {
+      "id": "dm-members-only-telegram",
+      "target": [
+        "telegram_v5_0.sendmessage.create"
+      ],
+      "when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "field": "chat_id",
+            "operator": ">",
+            "value": 0
+          },
+          {
+            "field": "chat_id",
+            "operator": "not_in",
+            "value": [
+              1000000001
+            ]
+          }
+        ]
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "DMs are only allowed to verified community members."
+      }
+    },
+    {
+      "id": "dm-members-only-slack",
+      "target": [
+        "slack.chat.postmessage.create"
+      ],
+      "when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "field": "channel",
+            "operator": "starts_with",
+            "value": "D"
+          },
+          {
+            "field": "channel",
+            "operator": "not_in",
+            "value": [
+              "D0CANARYMEMBER"
+            ]
+          }
+        ]
+      },
+      "action": {
+        "type": "POLICY_BLOCKED",
+        "message": "DMs are only allowed to verified community members."
+      }
+    }
+  ]
+}

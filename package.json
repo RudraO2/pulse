@@ -1,0 +1,61 @@
+{
+  "name": "pulse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pulse: an AI community manager that answers from your Notion, learns from your organizers and looks after every member. Every action runs through Swytchcode.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+    "start": "node --env-file-if-exists=.env --no-warnings=ExperimentalWarning dist/server-build/src/index.js",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:web": "vite build --config web/vite.config.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "spike:telegram": "tsx --env-file-if-exists=.env scripts/spike-telegram.ts",
+    "selftest": "tsx --env-file-if-exists=.env scripts/guardrail-selftest.ts",
+    "setup:notion": "tsx --env-file-if-exists=.env scripts/setup-notion.ts",
+    "seed:kb": "tsx --env-file-if-exists=.env scripts/seed-kb.ts",
+    "check:slack": "tsx --env-file-if-exists=.env scripts/check-slack.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.63",
+    "@ai-sdk/google": "^4.0.80",
+    "@ai-sdk/groq": "^4.0.48",
+    "@ai-sdk/provider": "^4.0.18",
+    "@hono/node-server": "^2.1.1",
+    "@swytchcode/runtime": "^1.1.6",
+    "ai": "^7.0.114",
+    "hono": "^4.13.9",
+    "qrcode": "^1.5.4",
+    "react-router": "^7.18.4",
+    "swytchcode": "^2.23.7",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.4",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "clsx": "^2.1.1",
+    "jsdom": "^29.1.1",
+    "lucide-react": "^1.48.0",
+    "motion": "^13.4.4",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}

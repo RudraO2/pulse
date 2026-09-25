@@ -1,0 +1,5 @@
+Telemetry is disabled. Run `swytchcode login` or set SWYTCHCODE_TOKEN to enable usage tracking.
+2026/09/25 23:52:10 [swytchcode exec] request tool=telegram_v5_0.sendmessage.create {"Authorization":"[REDACTED]","body":{"chat_id":555,"text":"hi"}}
+{"error":"blocked by policy \"cooldown-telegram\": cooling down","category":"rate_limit","retryable":true,"suggested_action":"retry with exponential backoff; this error is transient","docs_url":"https://docs.swytchcode.com/guides/retries/"}
+{"error":"blocked by policy \"dm-members-only-telegram\": DM to non-member","category":"policy_denied","suggested_action":"this call was blocked by a configured guard and was not executed - do not retry it or try to work around the guard; report to the user which guard blocked it. A human can review guards with: swytchcode policy list","docs_url":"https://docs.swytchcode.com/policies/policy-rules/"}
+2026/09/25 23:52:10 [swytchcode exec] failed tool=telegram_v5_0.sendmessage.create exit_code=6 error=policy violation
