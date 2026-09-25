@@ -1,14 +1,15 @@
 import { bus } from './bus.js'
 import { runCommunityAgent, type MemberSignal } from './agent/community.js'
 import { handleModReply } from './agent/learn.js'
-import { communityModel } from './agent/models.js'
-import { heuristicFrustration, isNoise, isQuestionLike, wantsHuman } from './agent/triage.js'
+import { communityModel, consoleModel } from './agent/models.js'
+import { directedAt, heuristicFrustration, isNoise, isQuestionLike, wantsHuman } from './agent/triage.js'
 import { createBatcher, type Batcher } from './conversation/batcher.js'
 import { readHistory } from './conversation/memory.js'
 import { channels, post } from './core/channels.js'
 import { modsChannel } from './core/mods.js'
 import { startRun } from './core/runs.js'
-import { pendingByThread, waitingQuestions } from './core/state-docs.js'
+import { openAttention, pendingByThread, waitingQuestions } from './core/state-docs.js'
+import { modsAvailable, platformLabel, postModsCard, quote } from './core/mods.js'
 import { markUsed, searchKnowledge } from './kb/knowledge.js'
 import type { InboundMessage } from './shared/events.js'
 import { getDb } from './store/db.js'
@@ -35,8 +36,13 @@ function isNewMember(m: InboundMessage): boolean {
   return Number(r.n) <= 1
 }
 
-function signalsFor(batch: InboundMessage[]): MemberSignal[] {
+function signalsFor(batch: InboundMessage[], history: Array<{ sender: string; text: string }>): MemberSignal[] {
   return batch.map((m) => {
+    const aimed = directedAt(m.text)
+    // An @reply to someone who recently asked a question, that isn't itself a question, is probably an answer.
+    const asker = aimed
+      ? [...history].reverse().slice(0, 12).find((h) => h.sender.toLowerCase().startsWith(aimed.toLowerCase()) && isQuestionLike(h.text))?.sender
+      : undefined
     const asks = asksToday(m)
     const past = isQuestionLike(m.text) ? searchQuestions(m.text, { limit: 3 }).filter((q) => q.msgId !== m.msgId && q.score > 3) : []
     const top = past[0]
@@ -46,6 +52,8 @@ function signalsFor(batch: InboundMessage[]): MemberSignal[] {
       asksToday: asks,
       isNew: isNewMember(m),
       repeatOf: top ? { text: top.text, userName: top.userName, answered: false } : undefined,
+      directedAt: aimed,
+      answersQuestionOf: asker && !isQuestionLike(m.text) ? asker : undefined,
     }
   })
 }
@@ -90,7 +98,8 @@ async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
   const relevant = batch.filter((m) => m.joined || !isNoise(m.text) || m.addressed)
   if (!relevant.length) return
   const target = relevant[relevant.length - 1]!
-  const model = communityModel()
+  // Scripted demo runs use the most reliable chain (Claude first); real traffic stays on the fast free chain.
+  const model = target.simulated ? consoleModel() ?? communityModel() : communityModel()
 
   // Feedback while thinking: Telegram "typing…", Slack 👀 on the question.
   if (!target.simulated && (target.addressed || isQuestionLike(target.text))) {
@@ -113,13 +122,24 @@ async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
     const waiting = waitingQuestions()
       .filter((p) => p.chatId === target.chatId && p.platform === target.platform)
       .map((p) => p.question)
+    const history = readHistory(key, 40)
+    const signals = signalsFor(relevant, history)
+
+    // A question aimed at another member is theirs to answer: Pulse stays out of it
+    // (the care sweep revives it if nobody replies).
+    if (!target.addressed && relevant.every((m) => signals.find((x) => x.msgId === m.msgId)?.directedAt && isQuestionLike(m.text))) {
+      run.steps.record('silent', 'Stay silent', 'ok', `question aimed at @${signals[0]?.directedAt}, not Pulse; the care sweep will follow up if nobody answers`)
+      run.end('silent')
+      return
+    }
+
     const result = await runCommunityAgent({
       run,
       model,
       chatKey: key,
       batch: relevant,
-      history: readHistory(key, 40),
-      signals: signalsFor(relevant),
+      history,
+      signals,
       waiting,
       onModReplyWatch: (ts) => {
         if (!target.simulated) watchModsThread(ts)
@@ -130,7 +150,22 @@ async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
       run.end(outcome === 'answered' ? 'answered' : 'failed', { summary: `model error: ${result.error.slice(0, 120)}` })
       return
     }
-    run.end(result.outcome, { reply: result.reply })
+    // Safety net in code: strong frustration or a request for a human always reaches the organizers.
+    let outcome = result.outcome
+    if (outcome !== 'escalated') {
+      const upset = relevant.find((m) => {
+        const sig = signals.find((x) => x.msgId === m.msgId)
+        return (sig?.frustration ?? 0) >= 0.6 || wantsHuman(m.text)
+      })
+      if (upset) {
+        const reason = wantsHuman(upset.text) ? 'asked for a human' : 'strong frustration signals'
+        openAttention({ kind: wantsHuman(upset.text) ? 'needs_human' : 'frustrated', platform: upset.platform, chatId: upset.chatId, msgId: upset.msgId, userId: upset.userId, userName: upset.userName, text: upset.text, reason, simulated: upset.simulated })
+        if (modsAvailable()) await postModsCard(`😤 **${upset.userName} needs a human**  ·  ${platformLabel(upset.platform)}\n${quote(upset.text)}\n_${reason} (safety net)_`, { runId: run.id })
+        run.steps.record('flag', `Flag ${upset.userName} for the organizers`, 'ok', `${reason} (code safety net)`, undefined, modsAvailable() ? ['slack.chat.postmessage.create'] : undefined)
+        outcome = 'escalated'
+      }
+    }
+    run.end(outcome, { reply: result.reply })
   } catch (e) {
     run.end('failed', { summary: String((e as Error).message).slice(0, 160) })
   }

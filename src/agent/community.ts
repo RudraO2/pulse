@@ -13,6 +13,7 @@ import { markAnswered } from '../store/repo.js'
 import { redact } from '../swy/redact.js'
 import { clampReply } from './format.js'
 import { communityInstructions } from './prompts.js'
+import { isQuestionLike } from './triage.js'
 
 // The Community Agent: one tool loop per message batch. It decides whether
 // the community needs an answer (from Notion), the organizers (Slack #mods),
@@ -27,6 +28,10 @@ export interface MemberSignal {
   repeatOf?: { text: string; userName: string; answered: boolean }
   asksToday: number
   isNew: boolean
+  /** this message is aimed at another member */
+  directedAt?: string
+  /** looks like an answer to a question this member asked recently */
+  answersQuestionOf?: string
 }
 
 export interface CommunityRunInput {
@@ -68,9 +73,11 @@ export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hi
     const tags = [
       m.joined ? 'JOINED' : '',
       m.addressed ? 'addressed to Pulse' : '',
-      s?.isNew ? 'new member' : '',
+      s?.isNew && !m.joined ? 'first message here' : '',
       s && s.frustration >= 0.3 ? `frustration≈${s.frustration.toFixed(1)}` : '',
       s && s.asksToday >= 2 ? `asked ${s.asksToday}× today` : '',
+      s?.directedAt && !s.answersQuestionOf ? `aimed at ${s.directedAt}, not Pulse` : '',
+      s?.answersQuestionOf ? `looks like an ANSWER to ${s.answersQuestionOf}'s question (consider propose_knowledge)` : '',
       s?.repeatOf ? `REPEAT of "${s.repeatOf.text.slice(0, 80)}" (asked by ${s.repeatOf.userName}${s.repeatOf.answered ? ', answered before' : ''})` : '',
       m.replyToId ? `reply to msg ${m.replyToId}` : '',
     ].filter(Boolean)
@@ -105,7 +112,11 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
     { knowledge: hits.map((h) => ({ q: h.entry.question, score: h.score })), signals: input.signals },
   )
 
+  /** set by the one terminal action of this batch (reply / welcome / ask_mods / stay_silent) */
   let outcome: RunOutcome | undefined
+  let flagged = false
+  let proposed = false
+  let kbChecked = false
   let replyText: string | undefined
   const usedKb = new Set<string>()
 
@@ -175,10 +186,14 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
     }),
 
     welcome: tool({
-      description: 'Welcome a member who just joined, with 1–2 useful pointers from the knowledge base and an invitation to ask anything.',
+      description: 'ONLY for a JOINED event with no question: welcome the newcomer with 1–2 useful pointers from the knowledge base and an invitation to ask anything.',
       inputSchema: z.object({ text: z.string() }),
       execute: async ({ text }) => {
         if (outcome) return 'Already handled this batch.'
+        // Code-enforced: a question is never "handled" by a welcome.
+        if (!batch.some((m) => m.joined) && batch.some((m) => isQuestionLike(m.text))) {
+          return 'Refused: this message is a question, not a join. Answer it with reply (greeting them is fine) or use ask_mods if the knowledge base does not cover it.'
+        }
         const step = run.steps.begin('welcome', 'Welcome the newcomer')
         const res = await sendToChat(text, step)
         if (!res.ok) {
@@ -201,6 +216,14 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
       }),
       execute: async ({ question, note_to_member, context }) => {
         if (outcome) return 'Already handled this batch.'
+        // Don't bother organizers with something the knowledge base already answers:
+        // give the model the entry once and let it decide again.
+        const known = searchKnowledge(question, 1)[0]
+        if (known && known.score >= 3 && !kbChecked) {
+          kbChecked = true
+          run.steps.record('search', 'Double-check the knowledge base', 'ok', `found “${known.entry.question}” before asking organizers`)
+          return `Before asking organizers: the knowledge base has [${known.entry.id}] Q: ${known.entry.question} A: ${known.entry.answer}. If this answers the member, call reply with kb_ids ["${known.entry.id}"]. Only call ask_mods again if it truly does not answer their question.`
+        }
         const step = run.steps.begin('mods', 'Ask the organizers', question)
         if (!modsAvailable()) {
           step.error('Slack #mods is not configured')
@@ -245,7 +268,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
           step.tools(['slack.chat.postmessage.create'])
         }
         step.ok(`organizers notified (${kind})`, { attention: item.id })
-        if (!outcome) outcome = 'escalated'
+        flagged = true
         return 'Organizers notified. Now reply to the member with empathy and what happens next (or stay_silent if a reply would not help).'
       },
     }),
@@ -283,7 +306,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
         })
         step.tools(['notion.page.create', 'slack.chat.postmessage.create'])
         step.waiting(`waiting for ✅ in #mods (${a.id})`, { approval: a.id })
-        if (!outcome) outcome = 'proposed'
+        proposed = true
         return 'Proposal sent to organizers.'
       },
     }),
@@ -303,12 +326,16 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
       description: 'Do not post anything (chit-chat, thanks, already answered, not for Pulse).',
       inputSchema: z.object({ reason: z.string() }),
       execute: async ({ reason }) => {
-        if (!outcome) outcome = 'silent'
+        if (outcome) return 'Already handled this batch.'
+        outcome = 'silent'
         run.steps.record('silent', 'Stay silent', 'ok', reason)
         return 'OK.'
       },
     }),
   }
+
+  // A flag always wins (organizers must see it); a proposal wins over silence.
+  const finalOutcome = (): RunOutcome => (flagged ? 'escalated' : proposed && (!outcome || outcome === 'silent') ? 'proposed' : outcome ?? 'silent')
 
   let steps = 0
   const now = new Date().toLocaleString('en-IN', { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
@@ -322,7 +349,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
       toolChoice: 'required',
       maxRetries: 0,
       providerOptions: { groq: { reasoningEffort: 'low' }, google: { thinkingConfig: { thinkingLevel: 'minimal' } } },
-      stopWhen: [isStepCount(MAX_STEPS), () => outcome !== undefined && outcome !== 'escalated' && outcome !== 'proposed'],
+      stopWhen: [isStepCount(MAX_STEPS), () => outcome !== undefined],
       onStepEnd: (step) => {
         steps++
         const served = step.response?.modelId
@@ -334,11 +361,11 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
       },
     })
     if (steps === 0) think.ok()
-    return { outcome: outcome ?? 'silent', reply: replyText, steps }
+    return { outcome: finalOutcome(), reply: replyText, steps }
   } catch (e) {
     const msg = String((e as Error)?.message ?? e)
     think.error(msg.slice(0, 200))
-    return { outcome: outcome ?? 'failed', reply: replyText, steps, error: msg }
+    return { outcome: outcome || flagged || proposed ? finalOutcome() : 'failed', reply: replyText, steps, error: msg }
   }
 }
 

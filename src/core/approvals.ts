@@ -221,6 +221,11 @@ async function executeAction(a: Approval, action: ApprovalAction, i: number): Pr
       const entry = await addKnowledge({ ...meta.entry, scripted: a.simulated || meta.entry.scripted }, a.runId)
       return { ...action, ok: true, result: entry.url }
     }
+    if (action.tool === TOOL.notionUpdate && meta.entryId && meta.patch && a.simulated) {
+      // Scripted runs never edit real entries: write a scripted copy (archived on demo reset).
+      const entry = await addKnowledge({ question: meta.patch.question ?? 'Updated entry', answer: meta.patch.answer ?? '', source: 'Organizer', learnedFrom: 'Organizer (Console, scripted)', scripted: true }, a.runId)
+      return { ...action, ok: true, result: entry.url }
+    }
     if (action.tool === TOOL.notionUpdate && meta.entryId && meta.patch) {
       const entry = await updateKnowledge(meta.entryId, meta.patch, a.runId)
       return { ...action, ok: true, result: entry.url }

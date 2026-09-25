@@ -65,7 +65,7 @@ async function settle(my: number, timeoutMs = 60_000): Promise<void> {
 
 let seq = 0
 async function say(p: Persona, text: string, opts: { joined?: boolean } = {}): Promise<void> {
-  const channel = env.SLACK_GENERAL_CHANNEL_ID
+  const channel = env.DEMO_SLACK_CHANNEL_ID ?? env.SLACK_GENERAL_CHANNEL_ID
   let ts: string | undefined
   if (channels.slack && channel && !opts.joined) {
     try {
@@ -78,7 +78,7 @@ async function say(p: Persona, text: string, opts: { joined?: boolean } = {}): P
     platform: 'slack',
     chatId: channel ?? 'demo',
     chatType: 'group',
-    chatTitle: '#general',
+    chatTitle: env.DEMO_SLACK_CHANNEL_ID ? '#demo' : '#general',
     userId: `sim_${p.id}`,
     userName: p.name,
     text: opts.joined ? `${p.name} joined the channel` : text,
@@ -104,17 +104,22 @@ async function modReply(p: Persona, text: string): Promise<void> {
   await handleModReply(pending.id, { userName: p.name, text, simulated: true })
 }
 
+/** Approve everything the latest scripted run asked for (a console request can prepare several). */
 async function approveLatest(p: Persona): Promise<void> {
-  const a = pendingApprovals().sort((x, y) => y.createdAt - x.createdAt)[0]
-  if (!a) {
+  const pending = pendingApprovals().filter((a) => a.simulated).sort((x, y) => y.createdAt - x.createdAt)
+  const latest = pending[0]
+  if (!latest) {
     bus.emit({ type: 'log', level: 'warn', text: 'demo: nothing is waiting for approval' })
     return
   }
+  const batch = pending.filter((a) => a.runId && a.runId === latest.runId)
   const channel = modsChannel()
-  if (channels.slack && channel && a.slackTs) {
-    await swyExec('slack.reactions.add.create', { body: { channel, timestamp: a.slackTs, name: 'white_check_mark' } }).catch(() => undefined)
+  for (const a of batch.length ? batch : [latest]) {
+    if (channels.slack && channel && a.slackTs) {
+      await swyExec('slack.reactions.add.create', { body: { channel, timestamp: a.slackTs, name: 'white_check_mark' } }).catch(() => undefined)
+    }
+    await decide(a.id, 'approve', p.name)
   }
-  await decide(a.id, 'approve', p.name)
 }
 
 async function runBeat(b: Beat, my: number): Promise<void> {
@@ -126,7 +131,7 @@ async function runBeat(b: Beat, my: number): Promise<void> {
   } else if ('settle' in b) await settle(my)
   else if ('modReply' in b) await modReply(PERSONAS[b.modReply]!, b.text)
   else if ('approve' in b) await approveLatest(PERSONAS[b.approve]!)
-  else if ('console' in b) await runConsole(b.console)
+  else if ('console' in b) await runConsole(b.console, { simulated: true })
   else if ('sweep' in b) await runSweep({ olderThanMs: 0, onlyScripted: true })
   else if ('digest' in b) await sendDigest({ trigger: 'demo' })
   else if ('pause' in b) await delay(b.pause, my)

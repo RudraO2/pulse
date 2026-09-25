@@ -58,6 +58,8 @@ const schema = z.object({
   SLACK_ESCALATION_CHANNEL_ID: opt,
   SLACK_SOCIAL_CHANNEL_ID: opt,
   SLACK_INVITE_URL: opt,
+  /** Scripted demo scenarios post here (defaults to SLACK_GENERAL_CHANNEL_ID). */
+  DEMO_SLACK_CHANNEL_ID: opt,
 
   NOTION_TOKEN: opt,
   NOTION_DATABASE_ID: opt,

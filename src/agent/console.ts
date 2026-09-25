@@ -32,8 +32,17 @@ import { consoleInstructions } from './prompts.js'
 
 const MAX_STEPS = 14
 
-const communityTargets = (): Array<{ platform: Platform; chatId: string; label: string }> => {
+/**
+ * Where announcements go. Scripted (demo) runs only ever reach the demo Slack
+ * channel, never the real Telegram group, so real members aren't confused.
+ */
+const communityTargets = (simulated = false): Array<{ platform: Platform; chatId: string; label: string }> => {
   const out: Array<{ platform: Platform; chatId: string; label: string }> = []
+  if (simulated) {
+    const demo = env.DEMO_SLACK_CHANNEL_ID ?? env.SLACK_GENERAL_CHANNEL_ID
+    if (channels.slack && demo) out.push({ platform: 'slack', chatId: demo, label: 'Slack (demo channel)' })
+    return out
+  }
   if (channels.telegram && env.TELEGRAM_COMMUNITY_CHAT_ID) out.push({ platform: 'telegram', chatId: env.TELEGRAM_COMMUNITY_CHAT_ID, label: 'Telegram group' })
   if (channels.slack && env.SLACK_GENERAL_CHANNEL_ID) out.push({ platform: 'slack', chatId: env.SLACK_GENERAL_CHANNEL_ID, label: 'Slack #general' })
   return out
@@ -71,7 +80,7 @@ function mdToHtml(md: string): string {
 export function consoleTools(run: Run) {
   const approvals: string[] = []
   const approve = async (input: Omit<Parameters<typeof requestApproval>[0], 'requestedBy' | 'runId'>) => {
-    const a = await requestApproval({ ...input, runId: run.id, requestedBy: 'Organizer via Console' })
+    const a = await requestApproval({ ...input, runId: run.id, requestedBy: 'Organizer via Console', simulated: run.simulated })
     approvals.push(a.id)
     return a
   }
@@ -152,7 +161,8 @@ export function consoleTools(run: Run) {
       }),
       execute: async ({ text, targets, pin, title }) => {
         const step = run.steps.begin('preview', 'Prepare announcement (dry-run)', title)
-        const chosen = communityTargets().filter((t) => targets.includes(t.platform as 'telegram' | 'slack'))
+        const all = communityTargets(run.simulated)
+        const chosen = run.simulated ? all : all.filter((t) => targets.includes(t.platform as 'telegram' | 'slack'))
         if (!chosen.length) {
           step.error('no community channel connected for those targets')
           return 'No connected channel for those targets.'
@@ -172,7 +182,7 @@ export function consoleTools(run: Run) {
       inputSchema: z.object({ question: z.string(), options: z.array(z.string()).min(2).max(10) }),
       execute: async ({ question, options }) => {
         const step = run.steps.begin('preview', 'Prepare Telegram poll (dry-run)', question, undefined, ['telegram_v5_0.sendpoll.create'])
-        if (!env.TELEGRAM_COMMUNITY_CHAT_ID || !channels.telegram) {
+        if (!env.TELEGRAM_COMMUNITY_CHAT_ID || !channels.telegram || run.simulated) {
           step.error('Telegram group not connected')
           return 'Telegram group not connected.'
         }
@@ -273,7 +283,7 @@ export function consoleTools(run: Run) {
     run_capability: tool({
       description:
         'Run an allow-listed Swytchcode method with exact args ({"body":{…},"params":{…}}). Read-only methods run immediately; anything that changes state becomes an approval with a dry-run preview. Community chat ids: ' +
-        communityTargets().map((t) => `${t.label}=${t.chatId}`).join(', '),
+        communityTargets(run.simulated).map((t) => `${t.label}=${t.chatId}`).join(', '),
       inputSchema: z.object({ canonical_id: z.string(), args_json: z.string().describe('JSON object'), reason: z.string().describe('one line for the approval card') }),
       execute: async ({ canonical_id, args_json, reason }) => {
         const step = run.steps.begin('execute', `Use ${canonical_id}`, reason, undefined, [canonical_id])
@@ -312,8 +322,8 @@ export function consoleTools(run: Run) {
   return { tools, approvals }
 }
 
-export async function runConsole(text: string): Promise<{ runId: string }> {
-  const run = startRun('console', text, { userName: 'Organizer' })
+export async function runConsole(text: string, opts: { simulated?: boolean } = {}): Promise<{ runId: string }> {
+  const run = startRun('console', text, { userName: 'Organizer', simulated: opts.simulated })
   void executeConsole(run, text)
   return { runId: run.id }
 }
@@ -326,7 +336,7 @@ async function executeConsole(run: Run, text: string): Promise<void> {
     return
   }
   const { tools, approvals } = consoleTools(run)
-  const surfaces = communityTargets().map((t) => t.label)
+  const surfaces = communityTargets(run.simulated).map((t) => t.label)
   if (modsAvailable()) surfaces.push('Slack #mods (organizers)')
   const now = new Date().toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
   const think = run.steps.begin('think', 'Understand the request')

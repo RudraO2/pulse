@@ -10,7 +10,7 @@ import { addKnowledge } from '../kb/knowledge.js'
 import type { KbItem, PendingQuestion, Platform } from '../shared/events.js'
 import { Bm25Index } from '../store/bm25.js'
 import { creditHelper, markAnswered } from '../store/repo.js'
-import { communityModel } from './models.js'
+import { communityModel, consoleModel } from './models.js'
 import { learnInstructions } from './prompts.js'
 
 // The learning loop. An organizer answers once in Slack #mods; Pulse relays it
@@ -33,7 +33,8 @@ async function relay(p: PendingQuestion, text: string, runId: string): Promise<b
     simulated: p.simulated,
   })
   if (res.ok) {
-    writeHistory(chatKey(p.platform, p.chatId), { sender: 'Pulse', text, ts: Date.now() })
+    const key = chatKey(p.platform, p.chatId)
+    writeHistory(p.simulated ? `sim:${key}` : key, { sender: 'Pulse', text, ts: Date.now() })
     markAnswered(p.platform, p.chatId, [p.msgId], 'human', runId)
   }
   return res.ok
@@ -42,7 +43,7 @@ async function relay(p: PendingQuestion, text: string, runId: string): Promise<b
 export async function handleModReply(pendingId: string, reply: ModReply): Promise<void> {
   const p = getPending(pendingId)
   if (!p || p.status !== 'waiting') return
-  const model = communityModel()
+  const model = p.simulated ? consoleModel() ?? communityModel() : communityModel()
   const run = startRun('mod', reply.text, { platform: p.platform, chatId: p.chatId, userName: reply.userName, simulated: p.simulated })
   run.steps.record('context', 'Organizer replied in #mods', 'ok', `${reply.userName}: “${reply.text.slice(0, 160)}”`, { question: p.question, member: p.userName })
 

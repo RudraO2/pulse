@@ -33,3 +33,10 @@ export function isNoise(text: string): boolean {
   const t = text.trim()
   return !t || t.length <= 2 || NOISE.test(t)
 }
+
+/** "@Meera how did you…" → "Meera" (the member a message is aimed at), ignoring Pulse itself. */
+export function directedAt(text: string): string | undefined {
+  const m = text.trim().match(/^@([A-Za-z][\w.-]*)/)
+  if (!m || /^pulse$/i.test(m[1]!)) return undefined
+  return m[1]
+}

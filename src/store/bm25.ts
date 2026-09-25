@@ -5,6 +5,17 @@ const STOP = new Set(
   'a an and are as at be by can do does for from how i in is it me my of on or so that the this to what when where which who why will with you your'.split(' '),
 )
 
+/** Tiny suffix stemmer so "parking" matches "park" and "deadlines" matches "deadline". */
+export function stem(t: string): string {
+  if (t.length <= 4 || /[0-9_.]/.test(t)) return t
+  if (t.endsWith('ies') && t.length > 5) return t.slice(0, -3) + 'y'
+  if (t.endsWith('ing') && t.length > 5) return t.slice(0, -3)
+  if (t.endsWith('ed') && t.length > 5) return t.slice(0, -2)
+  if (t.endsWith('es') && /(s|x|z|ch|sh)es$/.test(t)) return t.slice(0, -2)
+  if (t.endsWith('s') && !t.endsWith('ss')) return t.slice(0, -1)
+  return t
+}
+
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -12,6 +23,7 @@ export function tokenize(text: string): string[] {
     .split(/[\s]+/)
     .map(t => t.replace(/^[.-]+|[.-]+$/g, ''))
     .filter(t => t.length > 1 && !STOP.has(t))
+    .map(stem)
 }
 
 export interface Bm25Hit<T> {

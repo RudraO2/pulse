@@ -57,8 +57,9 @@ const learn: Beat[] = [
 
 const helpers: Beat[] = [
   { caption: 'A member answers another member. Pulse proposes saving it' },
-  { say: 'kabir', text: 'how do I get Telegram updates on localhost? my webhook never fires' },
-  { say: 'meera', text: "@Kabir you don't need a webhook, long-poll getUpdates through swy exec, it works behind NAT. That's what I did", wait: 600 },
+  { say: 'kabir', text: '@Meera how did you get Telegram updates working on localhost? my webhook never fires' },
+  { settle: true },
+  { say: 'meera', text: "@Kabir you don't need a webhook: long-poll getUpdates through swy exec, it works behind NAT. That's what I did" },
   { settle: true },
   { caption: 'An organizer approves with ✅: saved to Notion, helper credited' },
   { pause: 2500 },
@@ -92,7 +93,7 @@ const newcomers: Beat[] = [
 
 const announce: Beat[] = [
   { caption: 'The organizer asks the Console in plain English' },
-  { console: 'Lunch is moving to 1:30 PM today. Tell everyone on Telegram and Slack, pin it, and update the FAQ so Pulse answers correctly.' },
+  { console: 'Tonight’s online office hours with the Swytchcode team move to 8 PM. Tell everyone, pin it, and add it to the FAQ so Pulse answers correctly.' },
   { settle: true },
   { caption: 'Swytchcode dry-run previews wait for approval. Organizer approves' },
   { pause: 3000 },
