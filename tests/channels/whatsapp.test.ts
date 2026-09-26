@@ -100,3 +100,14 @@ describe('WhatsApp switches', () => {
     expect(replyMode('whatsapp', G)).toBe('paused')
   })
 })
+
+describe('organizer attribution', () => {
+  it('never turns a placeholder into a name', async () => {
+    const { organizerName } = await import('../../src/agent/learn.js')
+    expect(organizerName('An organizer')).toBeUndefined()
+    expect(organizerName('the team')).toBeUndefined()
+    expect(organizerName('Organizer (phone)')).toBeUndefined()
+    expect(organizerName(undefined)).toBeUndefined()
+    expect(organizerName('Rudra Pratap Singh')).toBe('Rudra')
+  })
+})

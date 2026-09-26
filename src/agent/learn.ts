@@ -27,6 +27,13 @@ export interface ModReply {
 
 const firstName = (n: string) => n.split(/\s+/)[0] ?? n
 
+/** The organizer's first name, or undefined when all we have is a placeholder ("An organizer", "the team"). */
+export function organizerName(n: string | undefined): string | undefined {
+  const s = n?.trim()
+  if (!s || /^(an?\s+)?(organi[sz]er|mod|moderator|admin)\b|^the team$|^unknown$|^organizer \(/i.test(s)) return undefined
+  return firstName(s)
+}
+
 async function relay(p: PendingQuestion, text: string, runId: string): Promise<boolean> {
   const res = await post(p.platform, p.chatId, text, {
     runId,
@@ -106,14 +113,14 @@ export async function handleModReply(pendingId: string, reply: ModReply): Promis
     // No LLM: relay verbatim and save as-is. The loop still works.
     await doRelay(`${reply.text}
 
-_— ${firstName(reply.userName)} from the team_`)
+_— ${organizerName(reply.userName) ? `${organizerName(reply.userName)} from the team` : 'the organizers'}_`)
     await doSave(p.question, reply.text)
   } else {
     try {
       await generateText({
         model,
         instructions: learnInstructions(),
-        prompt: `MEMBER QUESTION (from ${p.userName} on ${platformLabel(p.platform)}): ${p.question}\n\nORGANIZER ${reply.userName} REPLIED: ${reply.text}`,
+        prompt: `MEMBER QUESTION (from ${p.userName} on ${platformLabel(p.platform)}): ${p.question}\n\nORGANIZER REPLIED: ${reply.text}\nORGANIZER NAME: ${organizerName(reply.userName) ?? '(not known: credit "the organizers", never make up a name)'}`,
         tools,
         toolChoice: 'required',
         maxRetries: 0,
@@ -127,7 +134,7 @@ _— ${firstName(reply.userName)} from the team_`)
       run.steps.record('error', 'Model unavailable, relaying verbatim', 'error', String((e as Error).message).slice(0, 160))
       if (!relayed) await doRelay(`${reply.text}
 
-_— ${firstName(reply.userName)} from the team_`)
+_— ${organizerName(reply.userName) ? `${organizerName(reply.userName)} from the team` : 'the organizers'}_`)
       if (!saved) await doSave(p.question, reply.text)
     }
   }
