@@ -12,6 +12,7 @@ import {
 } from '../core/approvals.js'
 import { channels } from '../core/channels.js'
 import { modsAvailable, postModsCard } from '../core/mods.js'
+import { platformLabel, quotesReplies } from '../channels/platforms.js'
 import { startRun, type Run } from '../core/runs.js'
 import { communityStats } from '../core/stats.js'
 import { openAttentionItems, waitingQuestions } from '../core/state-docs.js'
@@ -47,6 +48,7 @@ const communityTargets = (simulated = false): Array<{ platform: Platform; chatId
   }
   if (channels.telegram && env.TELEGRAM_COMMUNITY_CHAT_ID) out.push({ platform: 'telegram', chatId: env.TELEGRAM_COMMUNITY_CHAT_ID, label: 'Telegram group' })
   if (channels.slack && env.SLACK_GENERAL_CHANNEL_ID) out.push({ platform: 'slack', chatId: env.SLACK_GENERAL_CHANNEL_ID, label: 'Slack #general' })
+  for (const g of channels.whatsapp?.enabledGroups() ?? []) out.push({ platform: 'whatsapp', chatId: g.jid, label: `WhatsApp · ${g.name}` })
   return out
 }
 
@@ -115,7 +117,7 @@ function memberTarget(about: ConsoleAbout): MemberTarget | undefined {
     attentionId: item?.id ?? c?.escalation?.attentionId,
     case: c,
     context: [
-      `THIS REQUEST IS ABOUT ONE MEMBER: ${t.userName} (${t.platform === 'telegram' ? 'Telegram' : 'Slack'}).`,
+      `THIS REQUEST IS ABOUT ONE MEMBER: ${t.userName} (${platformLabel(t.platform)}).`,
       c ? `Their problem: ${c.topic}. Mood now ${fmtMood(c.mood)}. ${c.escalation?.reason ? `Flagged because: ${c.escalation.reason}.` : ''}` : `Flagged because: ${item!.reason}.`,
       `What they said (oldest first):\n${said.join('\n')}`,
       replies.length ? `Replies so far:\n${replies.join('\n')}` : '',
@@ -200,22 +202,25 @@ export function consoleTools(run: Run, member?: MemberTarget) {
     }),
 
     announce: tool({
-      description: 'Prepare an announcement to the community (Telegram group and/or Slack #general), optionally pinned. Creates ONE approval with a Swytchcode dry-run preview per channel.',
+      description: 'Prepare an announcement to the community (Telegram group, Slack #general and/or the WhatsApp groups Pulse is on in), optionally pinned (Telegram/Slack only). Creates ONE approval with a Swytchcode dry-run preview per channel.',
       inputSchema: z.object({
         text: z.string().describe('the announcement, markdown, 1–5 sentences'),
-        targets: z.array(z.enum(['telegram', 'slack'])).default(['telegram', 'slack']),
+        targets: z.array(z.enum(['telegram', 'slack', 'whatsapp'])).default(['telegram', 'slack', 'whatsapp']),
         pin: z.boolean().default(false),
         title: z.string().describe('short title for the approval card'),
       }),
       execute: async ({ text, targets, pin, title }) => {
         const step = run.steps.begin('preview', 'Prepare announcement (dry-run)', title)
         const all = communityTargets(run.simulated)
-        const chosen = run.simulated ? all : all.filter((t) => targets.includes(t.platform as 'telegram' | 'slack'))
+        const chosen = run.simulated ? all : all.filter((t) => targets.includes(t.platform as 'telegram' | 'slack' | 'whatsapp'))
         if (!chosen.length) {
           step.error('no community channel connected for those targets')
           return 'No connected channel for those targets.'
         }
-        const actions = chosen.map((t) => postAction(t.platform, t.chatId, text, `Post to ${t.label}${pin ? ' and pin' : ''}`, { pin }))
+        const actions = chosen.map((t) => {
+          const pinIt = pin && t.platform !== 'whatsapp'
+          return postAction(t.platform, t.chatId, text, `Post to ${t.label}${pinIt ? ' and pin' : ''}`, { pin: pinIt })
+        })
         step.tools(actions.map((a) => a.tool))
         const a = await approve({ kind: 'announcement', title, summary: text, actions })
         const blocked = a.actions.filter((x) => x.blocked)
@@ -282,10 +287,10 @@ export function consoleTools(run: Run, member?: MemberTarget) {
             execute: async ({ text }) => {
               const step = run.steps.begin('preview', `Prepare a reply to ${member.userName.split(' ')[0]} (dry-run)`, text.slice(0, 120))
               const body = `${text.trim()}\n\n_— ${env.ORGANIZER_NAME}_`
-              const action = postAction(member.platform, member.chatId, body, `Reply to ${member.userName} in ${member.platform === 'telegram' ? 'Telegram' : 'Slack'}`, {
+              const action = postAction(member.platform, member.chatId, body, `Reply to ${member.userName} in ${platformLabel(member.platform)}`, {
                 threadTs: member.platform === 'slack' ? member.threadTs ?? member.replyTo : undefined,
               })
-              action.meta = { ...action.meta, replyToId: member.platform === 'telegram' ? member.replyTo : undefined, member: { userId: member.userId, caseId: member.case?.id, attentionId: member.attentionId, reply: text } }
+              action.meta = { ...action.meta, replyToId: quotesReplies(member.platform) ? member.replyTo : undefined, member: { userId: member.userId, caseId: member.case?.id, attentionId: member.attentionId, reply: text } }
               step.tools([action.tool])
               const a = await approve({ kind: 'post', title: `Reply to ${member.userName}`, summary: body, actions: [action] })
               const blocked = a.actions.find((x) => x.blocked)

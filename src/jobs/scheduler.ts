@@ -1,3 +1,4 @@
+import { quotesReplies, sendTools } from '../channels/platforms.js'
 import { bus } from '../bus.js'
 import { env } from '../config/env.js'
 import { post } from '../core/channels.js'
@@ -38,10 +39,10 @@ export async function runSweep(opts: SweepOptions = {}): Promise<{ checked: numb
     for (const m of items.slice(0, 8)) {
       const hit = searchKnowledge(m.text, 1)[0]
       if (hit && hit.score >= 4) {
-        const step = run.steps.begin('reply', `Answer ${m.userName} from the knowledge base`, hit.entry.question, undefined, [m.platform === 'telegram' ? 'telegram_v5_0.sendmessage.create' : 'slack.chat.postmessage.create'])
+        const step = run.steps.begin('reply', `Answer ${m.userName} from the knowledge base`, hit.entry.question, undefined, sendTools(m.platform))
         const res = await post(m.platform, m.chatId, `Sorry for the wait, ${m.userName.split(' ')[0]}! ${hit.entry.answer}\n\n📎 [${hit.entry.question}](${hit.entry.url})`, {
           runId: run.id,
-          replyToId: m.platform === 'telegram' ? m.msgId : undefined,
+          replyToId: quotesReplies(m.platform) ? m.msgId : undefined,
           threadTs: m.platform === 'slack' ? m.threadTs ?? m.msgId : undefined,
           simulated: m.simulated,
         })

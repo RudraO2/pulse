@@ -30,7 +30,7 @@ export async function postModsCard(markdown: string, opts: { threadTs?: string; 
   }
 }
 
-export const platformLabel = (p: string): string => (p === 'telegram' ? 'Telegram' : p === 'slack' ? 'Slack' : p)
+export { platformLabel } from '../channels/platforms.js'
 
 /** "> line" quote block for Slack cards. */
 export const quote = (text: string): string =>

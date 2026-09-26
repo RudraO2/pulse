@@ -31,6 +31,7 @@ export function initialState(): ClientState {
     services: {
       telegram: { state: 'disabled', at: 0 },
       slack: { state: 'disabled', at: 0 },
+      whatsapp: { state: 'disabled', at: 0 },
       notion: { state: 'disabled', at: 0 },
       resend: { state: 'disabled', at: 0 },
       llm: { state: 'disabled', at: 0 },
@@ -47,6 +48,7 @@ export function initialState(): ClientState {
     pending: [],
     cases: [],
     notify: { email: false, devices: 0, queued: 0, tunnel: 'off' },
+    whatsapp: { status: 'off', groups: [], dms: true },
     helpers: [],
     guardrails: [],
     selftest: [],
@@ -158,6 +160,9 @@ export function applyEvent(s: ClientState, ev: SequencedEvent): ClientState {
     case 'notify':
       next.notify = ev.state
       if (ev.sent?.channel === 'email') return pushToast(next, ev.sent.ok ? 'ok' : 'bad', ev.sent.ok ? `Emailed you: ${ev.sent.detail.split(' → ')[0]}` : `Email: ${ev.sent.detail}`)
+      return next
+    case 'whatsapp':
+      next.whatsapp = ev.state
       return next
     case 'status':
       next.services = { ...next.services, [ev.service]: ev.status }

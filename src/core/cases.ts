@@ -1,3 +1,4 @@
+import { quotesReplies } from '../channels/platforms.js'
 import { randomUUID } from 'node:crypto'
 import { bus } from '../bus.js'
 import { env } from '../config/env.js'
@@ -208,7 +209,7 @@ export async function replyToMember(id: string, text: string, by = 'the team'): 
   const replyTo = c ? c.lastMsgId : item?.msgId
   const body = `${text.trim()}\n\n_— ${by}_`
   const res = await post(target.platform, target.chatId, body, {
-    replyToId: target.platform === 'telegram' ? replyTo : undefined,
+    replyToId: quotesReplies(target.platform) ? replyTo : undefined,
     threadTs: target.platform === 'slack' ? c?.threadTs ?? replyTo : undefined,
     simulated: target.simulated,
   })

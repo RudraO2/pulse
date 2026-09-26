@@ -19,7 +19,7 @@ export function MemberActions({ id, name, platform, onResolve, resolveLabel = 'R
   const [mode, setMode] = useState<'idle' | 'pulse' | 'self'>('idle')
   const [runId, setRunId] = useState<string>()
   const [busy, setBusy] = useState(false)
-  const where = platform === 'telegram' ? 'Telegram' : 'Slack'
+  const where = platform === 'telegram' ? 'Telegram' : platform === 'whatsapp' ? 'WhatsApp' : 'Slack'
 
   if (runId) {
     return (

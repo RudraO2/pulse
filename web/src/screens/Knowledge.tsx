@@ -15,7 +15,7 @@ const PAGE = 25
 function Provenance({ e, pending }: { e: KbItem; pending?: PendingQuestion }) {
   const steps: Array<{ tone: string; t?: number; text: string }> = []
   if (pending) {
-    steps.push({ tone: 'bg-warn', t: pending.askedAt, text: `${pending.userName} asked on ${pending.platform === 'telegram' ? 'Telegram' : 'Slack'}` })
+    steps.push({ tone: 'bg-warn', t: pending.askedAt, text: `${pending.userName} asked on ${pending.platform === 'telegram' ? 'Telegram' : pending.platform === 'whatsapp' ? 'WhatsApp' : 'Slack'}` })
     steps.push({ tone: 'bg-warn', t: pending.askedAt, text: 'Not in Notion, so Pulse asked the organizers in #mods' })
     if (pending.answeredAt) steps.push({ tone: 'bg-accent', t: pending.answeredAt, text: `${pending.answeredBy ?? 'An organizer'} answered in the thread` })
   } else if (e.learnedFrom) {

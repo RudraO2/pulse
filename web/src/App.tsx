@@ -6,12 +6,13 @@ import type { ServiceName } from '@shared/events'
 import { CommandPalette } from './components/CommandPalette'
 import { Heartbeat } from './components/Heartbeat'
 import { PhoneDialog } from './components/PhoneDialog'
+import { WhatsAppDialog } from './components/WhatsAppDialog'
 import { RunDrawerHost } from './components/RunDrawer'
 import { Toasts } from './components/Toasts'
 import { api } from './lib/api'
 import { NAV_GROUPS, openPalette, togglePalette, togglePresent, toggleTheme, usePrefs } from './lib/prefs'
 import { useStore } from './lib/store'
-import { Dot, PulseMark } from './ui/primitives'
+import { Dot, PlatformIcon, PulseMark } from './ui/primitives'
 import { ConsoleScreen } from './screens/Console'
 import { ConversationsScreen } from './screens/Conversations'
 import { DemoScreen } from './screens/Demo'
@@ -23,6 +24,7 @@ import { OverviewScreen } from './screens/Overview'
 const SERVICE_LABEL: Record<ServiceName, string> = {
   telegram: 'Telegram',
   slack: 'Slack',
+  whatsapp: 'WhatsApp',
   notion: 'Notion',
   resend: 'Resend',
   llm: 'LLM',
@@ -122,7 +124,9 @@ function Sidebar() {
 function TopBar() {
   const { dark, present } = usePrefs()
   const [phone, setPhone] = useState(false)
+  const [whatsapp, setWhatsapp] = useState(false)
   const devices = useStore((s) => s.notify.devices)
+  const wa = useStore((s) => s.whatsapp)
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/85 backdrop-blur-md">
       <div className="flex items-center gap-3 px-4 py-2.5 md:px-6 xl:px-8">
@@ -140,7 +144,10 @@ function TopBar() {
         </button>
         <div className="ml-auto flex items-center gap-1">
           <Heartbeat />
-          <button onClick={() => setPhone(true)} className="relative ml-2 grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="Pulse on your phone" title="Pulse on your phone">
+          <button onClick={() => setWhatsapp(true)} className="relative ml-2 grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="WhatsApp" title={wa.status === 'connected' ? `WhatsApp: ${wa.groups.filter((g) => g.enabled).length} group(s) on` : 'Link WhatsApp'}>
+            <PlatformIcon platform="whatsapp" className={clsx('size-4', wa.status !== 'connected' && 'opacity-50 grayscale')} />
+          </button>
+          <button onClick={() => setPhone(true)} className="relative grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="Pulse on your phone" title="Pulse on your phone">
             <Smartphone className="size-4" />
             {devices > 0 && <span className="absolute top-[7px] right-[8px] size-1.5 rounded-full bg-ok" />}
           </button>
@@ -154,6 +161,7 @@ function TopBar() {
       </div>
       <ScenarioBanner />
       {phone && <PhoneDialog onClose={() => setPhone(false)} />}
+      {whatsapp && <WhatsAppDialog onClose={() => setWhatsapp(false)} />}
     </header>
   )
 }

@@ -1,3 +1,4 @@
+import { quotesReplies, sendTools } from '../channels/platforms.js'
 import { generateText, isStepCount, tool, type LanguageModel } from 'ai'
 import { z } from 'zod'
 import { env } from '../config/env.js'
@@ -132,11 +133,11 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
   const sendToChat = async (text: string, step: ReturnType<Run['steps']['begin']>) => {
     const res = await post(platform, chatId, clampReply(text), {
       runId: run.id,
-      replyToId: platform === 'telegram' && !target.joined ? target.msgId : undefined,
+      replyToId: quotesReplies(platform) && !target.joined ? target.msgId : undefined,
       threadTs: threadRoot,
       simulated,
     })
-    step.tools([platform === 'telegram' ? 'telegram_v5_0.sendmessage.create' : 'slack.chat.postmessage.create'])
+    step.tools(sendTools(platform))
     if (res.ok) {
       writeHistory(input.chatKey, { sender: 'Pulse', text, ts: Date.now() })
       if (platform === 'slack' && threadRoot && !simulated) channels.slack?.watchThread(chatId, threadRoot)
@@ -240,7 +241,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
         }
         const pending = createPending({ platform, chatId, msgId: target.msgId, userName: target.userName, question, simulated })
         const card = await postModsCard(
-          `❓ **${target.userName} asked something Pulse doesn't know yet**  ·  ${platformLabel(platform)}${target.chatTitle && platform === 'telegram' ? ` · ${target.chatTitle}` : ''}\n${quote(question)}${context ? `\n_${context}_` : ''}\n\nReply in this thread. Pulse will answer ${target.userName.split(' ')[0]} and save it to the knowledge base.`,
+          `❓ **${target.userName} asked something Pulse doesn't know yet**  ·  ${platformLabel(platform)}${target.chatTitle && platform !== 'slack' ? ` · ${target.chatTitle}` : ''}\n${quote(question)}${context ? `\n_${context}_` : ''}\n\nReply in this thread. Pulse will answer ${target.userName.split(' ')[0]} and save it to the knowledge base.`,
           { runId: run.id },
         )
         step.tools(['slack.chat.postmessage.create'])

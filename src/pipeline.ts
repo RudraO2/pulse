@@ -1,3 +1,4 @@
+import { quotesReplies } from './channels/platforms.js'
 import { bus } from './bus.js'
 import { runCommunityAgent, type MemberSignal } from './agent/community.js'
 import { handleModReply } from './agent/learn.js'
@@ -88,7 +89,7 @@ async function fallbackAnswer(batch: InboundMessage[], runId: string): Promise<'
   if (!hit || hit.score < 4) return 'silent'
   const res = await post(target.platform, target.chatId, `${hit.entry.answer}\n\n📎 [${hit.entry.question}](${hit.entry.url})`, {
     runId,
-    replyToId: target.platform === 'telegram' ? target.msgId : undefined,
+    replyToId: quotesReplies(target.platform) ? target.msgId : undefined,
     threadTs: target.platform === 'slack' ? target.threadTs ?? target.msgId : undefined,
     simulated: target.simulated,
   })
@@ -157,6 +158,7 @@ async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
   // Feedback while thinking: Telegram "typing…", Slack 👀 on the question.
   if (relevant.length && !target.simulated && (target.addressed || isQuestionLike(target.text))) {
     if (target.platform === 'telegram') void channels.telegram?.typing(target.chatId)
+    if (target.platform === 'whatsapp') void channels.whatsapp?.typing(target.chatId)
     if (target.platform === 'slack') void channels.slack?.ack(target.chatId, target.msgId, 'eyes')
   }
 

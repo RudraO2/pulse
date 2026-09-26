@@ -135,6 +135,16 @@ const schema = z.object({
     .optional()
     .transform((v) => (v?.trim().toLowerCase() === 'cloudflared' ? 'cloudflared' : undefined)),
   CLOUDFLARED_BIN: opt,
+  /**
+   * WhatsApp through a linked device (Baileys): link by scanning a QR in the
+   * dashboard, then turn Pulse on per group. Off = never touch WhatsApp.
+   */
+  WHATSAPP_ENABLED: bool(true),
+  /** Pulse speaks from the organizer's own number, so its messages start with this. */
+  WHATSAPP_PREFIX: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined ? '🤖 ' : v)),
 })
 
 export type Env = z.infer<typeof schema> & { MODE: 'live' | 'replay' | 'mock' }

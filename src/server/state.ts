@@ -6,6 +6,7 @@ import { allApprovals } from '../core/approvals.js'
 import { allAttention, allPending } from '../core/state-docs.js'
 import { allCases } from '../core/cases.js'
 import { notifyState } from '../core/notify.js'
+import { whatsappState } from '../core/channels.js'
 import { getDb } from '../store/db.js'
 import { kvGetJson, kvSetJson, recentMessages, recentRuns, topHelpers, upsertRun } from '../store/repo.js'
 import type {
@@ -31,7 +32,7 @@ const MAX_RUNS = 80
 const MAX_CALLS = 200
 const MAX_GUARDRAILS = 100
 const RING_SIZE = 3000
-const SERVICES: ServiceName[] = ['telegram', 'slack', 'notion', 'resend', 'llm', 'swytchcode']
+const SERVICES: ServiceName[] = ['telegram', 'slack', 'whatsapp', 'notion', 'resend', 'llm', 'swytchcode']
 
 type Mode = StateSnapshot['mode']
 type Ev<T extends GtEvent['type']> = Extract<GtEvent, { type: T }>
@@ -243,6 +244,7 @@ export function createStateStore(opts: StateStoreOptions = {}): StateStore {
       pending: persist ? allPending(100) : [],
       cases: persist ? allCases(100) : [],
       notify: notifyState(),
+      whatsapp: whatsappState(),
       helpers: persist ? topHelpers(10) : [],
       guardrails,
       selftest,

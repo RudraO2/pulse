@@ -45,6 +45,12 @@ export const api = {
   pushKey: () => request<{ key: string }>('GET', '/api/push/key'),
   pushSubscribe: (subscription: PushSubscriptionJSON) => request<{ devices: number }>('POST', '/api/push/subscribe', { subscription }),
   pushTest: () => request<{ sent: number }>('POST', '/api/push/test'),
+  // WhatsApp (linked device)
+  waLink: () => request('POST', '/api/whatsapp/link'),
+  waLogout: () => request('POST', '/api/whatsapp/logout'),
+  waRefresh: () => request('POST', '/api/whatsapp/refresh'),
+  waGroup: (jid: string, enabled: boolean) => request('POST', '/api/whatsapp/groups', { jid, enabled }),
+  waDms: (enabled: boolean) => request('POST', '/api/whatsapp/dms', { enabled }),
   refresh: async () => {
     const snap = await request<StateSnapshot>('GET', '/api/state')
     if (snap) store.hydrate(snap)

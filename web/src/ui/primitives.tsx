@@ -142,6 +142,14 @@ export function PlatformIcon({ platform, className }: { platform?: Platform | st
         <path d="M15 19a2 2 0 1 1-2 2v-2h2zm0-1a2 2 0 1 1 0-4h5a2 2 0 1 1 0 4h-5z" fill="#ecb22e" />
       </svg>
     )
+  if (platform === 'whatsapp')
+    return (
+      <svg viewBox="0 0 24 24" className={clsx('size-3.5 shrink-0', className)} aria-label="WhatsApp">
+        <circle cx="12" cy="12" r="12" fill="#25d366" />
+        <path d="M6.3 17.7l.9-3.2a5.8 5.8 0 1 1 2.2 2.2l-3.1 1z" fill="none" stroke="#fff" strokeWidth="1.4" strokeLinejoin="round" />
+        <path d="M10 9.4c.1-.3.4-.4.6-.3l.6 1.3c0 .2 0 .3-.2.5l-.3.3c.4.8 1 1.4 1.8 1.8l.3-.3c.2-.2.3-.2.5-.2l1.3.6c.1.2 0 .5-.3.7-.9.7-2.3.3-3.5-.9s-1.6-2.6-.8-3.5z" fill="#fff" />
+      </svg>
+    )
   if (platform === 'notion')
     return (
       <svg viewBox="0 0 24 24" className={clsx('size-3.5 shrink-0', className)} aria-label="Notion">

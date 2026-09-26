@@ -6,6 +6,7 @@ import { env, hasLLM, hasNotion, hasResend, hasSlack, hasTelegram } from './conf
 import { registerLearningFollowUps } from './agent/learn.js'
 import { SlackAdapter } from './channels/slack.js'
 import { TelegramAdapter } from './channels/telegram.js'
+import { WhatsAppAdapter } from './channels/whatsapp.js'
 import { decide, startApprovalWatcher } from './core/approvals.js'
 import { channels } from './core/channels.js'
 import { getPending, resolveAttention } from './core/state-docs.js'
@@ -125,6 +126,17 @@ async function main(): Promise<void> {
       channels.slack = undefined
     }
   }
+  if (env.WHATSAPP_ENABLED && env.POLLER_ENABLED) {
+    // Linked device: reconnects by itself if this laptop was linked before, else waits for a QR scan.
+    const wa = new WhatsAppAdapter({
+      onMessage: (m) => void onMessage(m),
+      beginBacklog: () => batcher.beginBacklog('whatsapp'),
+      endBacklog: () => batcher.endBacklog('whatsapp'),
+    })
+    channels.whatsapp = wa
+    await wa.start().catch((e) => bus.emit({ type: 'status', service: 'whatsapp', status: { state: 'down', detail: String((e as Error).message).slice(0, 120), at: Date.now() } }))
+    log(`whatsapp: ${wa.state().status === 'off' ? 'not linked (scan the QR in the dashboard)' : 'linked device reconnecting'}`)
+  }
   store.setChannels(channelList)
   startScheduler()
 
@@ -144,6 +156,15 @@ async function main(): Promise<void> {
     audit: async () => ({ network: await swyAuditNetwork(60).catch(() => []), policy: await swyAuditPolicy(60).catch(() => []) }),
     scenarios: () => listScenarios(),
     onDemo: (action, body) => demo(action, body, store),
+    whatsapp: channels.whatsapp
+      ? {
+          link: () => channels.whatsapp!.link(),
+          logout: () => channels.whatsapp!.logout(),
+          refresh: () => channels.whatsapp!.refreshGroups(),
+          setGroup: async (jid, enabled) => channels.whatsapp!.setGroup(jid, enabled),
+          setDms: async (enabled) => channels.whatsapp!.setDms(enabled),
+        }
+      : undefined,
     onCaseResolve: async (id, by) => (id.startsWith('at_') ? resolveAttention(id) : resolveCase(id, by)) ?? { error: 'not found' },
     onCaseReply: (id, text) => replyToMember(id, text, env.ORGANIZER_NAME),
     onAnswerPending: async (id, text) => {
@@ -193,7 +214,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     log('shutting down')
     stopTunnel()
-    await Promise.allSettled([channels.telegram?.stop(), channels.slack?.stop()])
+    await Promise.allSettled([channels.telegram?.stop(), channels.slack?.stop(), channels.whatsapp?.stop()])
     batcher.stop()
     store.stop()
     await server.close()

@@ -53,9 +53,30 @@ function inlineSlack(text: string): string {
     .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
 }
 
+/** WhatsApp: *bold*, _italic_, ```mono``` work as-is; links can't have labels. */
+export function toWhatsApp(md: string): string {
+  const parts: string[] = []
+  let last = 0
+  for (const m of md.matchAll(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g)) {
+    parts.push(inlineWhatsApp(md.slice(last, m.index)))
+    parts.push('```' + (m[1] ?? '').replace(/\n$/, '') + '```')
+    last = (m.index ?? 0) + m[0].length
+  }
+  parts.push(inlineWhatsApp(md.slice(last)))
+  return parts.join('').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function inlineWhatsApp(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, '*$1*')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, label: string, url: string) => (label === url ? url : `${label}: ${url}`))
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
+}
+
 export function formatFor(platform: Platform, md: string): string {
   if (platform === 'telegram') return toTelegramHtml(md)
   if (platform === 'slack') return toSlackMrkdwn(md)
+  if (platform === 'whatsapp') return toWhatsApp(md)
   return md
 }
 

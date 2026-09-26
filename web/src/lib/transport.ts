@@ -28,6 +28,7 @@ const EVENT_TYPES: GtEvent['type'][] = [
   'scenario',
   'case',
   'notify',
+  'whatsapp',
   'log',
 ]
 

@@ -2,8 +2,9 @@ import { bus } from '../bus.js'
 import { guardrails } from '../../guardrails.config.js'
 import type { SlackAdapter } from '../channels/slack.js'
 import type { TelegramAdapter } from '../channels/telegram.js'
+import type { WhatsAppAdapter } from '../channels/whatsapp.js'
 import type { SendOptions } from '../channels/types.js'
-import type { GuardrailKind, Platform } from '../shared/events.js'
+import type { GuardrailKind, Platform, WhatsAppState } from '../shared/events.js'
 import { SwyError } from '../swy/exec.js'
 import { setCooldownChats, type PolicyPlatform } from '../swy/policies.js'
 
@@ -12,7 +13,9 @@ import { setCooldownChats, type PolicyPlatform } from '../swy/policies.js'
 //   → adapter.send (idempotent outbox) → swy exec (policies enforced pre-execution)
 // Policy blocks are surfaced as guardrail events, never retried.
 
-export const channels: { telegram?: TelegramAdapter; slack?: SlackAdapter } = {}
+export const channels: { telegram?: TelegramAdapter; slack?: SlackAdapter; whatsapp?: WhatsAppAdapter } = {}
+
+export const whatsappState = (): WhatsAppState => channels.whatsapp?.state() ?? { status: 'off', groups: [], dms: true }
 
 export interface PostOptions extends SendOptions {
   simulated?: boolean
@@ -78,11 +81,28 @@ async function refreshCooldowns(platform: PolicyPlatform): Promise<void> {
 
 // ── post ────────────────────────────────────────────────────────────────────
 
+/** WhatsApp isn't sent through Swytchcode, so its rate window is enforced here. */
+function whatsappTooFast(chatId: string, runId?: string): PostResult['blocked'] | undefined {
+  const now = Date.now()
+  const key = `whatsapp:${chatId}`
+  const w = (sends.get(key) ?? []).filter((t) => now - t < 60_000)
+  if (w.length >= guardrails.rateLimit.perChatPerMinute) {
+    const message = 'This WhatsApp chat is cooling down: too many Pulse messages this minute.'
+    bus.emit({ type: 'guardrail', kind: 'rate_limit', platform: 'whatsapp', chatId, detail: message, runId })
+    return { kind: 'rate_limit', message }
+  }
+  sends.set(key, [...w, now])
+  return undefined
+}
+
 export async function post(platform: Platform, chatId: string, text: string, opts: PostOptions = {}): Promise<PostResult> {
-  const adapter = platform === 'telegram' ? channels.telegram : platform === 'slack' ? channels.slack : undefined
+  const adapter = platform === 'telegram' ? channels.telegram : platform === 'slack' ? channels.slack : platform === 'whatsapp' ? channels.whatsapp : undefined
   if (!adapter) return { ok: false, error: `${platform} is not connected` }
   try {
-    await recordSend(platform as PolicyPlatform, chatId)
+    if (platform === 'whatsapp') {
+      const blocked = whatsappTooFast(chatId, opts.runId)
+      if (blocked) return { ok: false, blocked }
+    } else await recordSend(platform as PolicyPlatform, chatId)
     const res = await adapter.send(chatId, text, opts)
     if (!res.duplicate || res.msgId) {
       bus.emit({ type: 'message.out', platform, chatId, text, runId: opts.runId, replyToId: opts.replyToId, threadTs: opts.threadTs, msgId: res.msgId, simulated: opts.simulated })
@@ -91,6 +111,11 @@ export async function post(platform: Platform, chatId: string, text: string, opt
   } catch (e) {
     const blocked = reportBlock(e, { platform, chatId, runId: opts.runId })
     if (blocked) return { ok: false, blocked }
-    return { ok: false, error: String((e as Error).message).slice(0, 200) }
+    const msg = String((e as Error).message)
+    if (platform === 'whatsapp' && /secret-like/.test(msg)) {
+      bus.emit({ type: 'guardrail', kind: 'secret', platform, chatId, detail: msg, runId: opts.runId })
+      return { ok: false, blocked: { kind: 'secret', message: msg } }
+    }
+    return { ok: false, error: msg.slice(0, 200) }
   }
 }

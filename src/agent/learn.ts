@@ -1,3 +1,4 @@
+import { quotesReplies, sendTools } from '../channels/platforms.js'
 import { generateText, isStepCount, tool } from 'ai'
 import { z } from 'zod'
 import { chatKey, writeHistory } from '../conversation/memory.js'
@@ -29,7 +30,7 @@ const firstName = (n: string) => n.split(/\s+/)[0] ?? n
 async function relay(p: PendingQuestion, text: string, runId: string): Promise<boolean> {
   const res = await post(p.platform, p.chatId, text, {
     runId,
-    replyToId: p.platform === 'telegram' ? p.msgId : undefined,
+    replyToId: quotesReplies(p.platform) ? p.msgId : undefined,
     threadTs: p.platform === 'slack' ? p.msgId : undefined,
     simulated: p.simulated,
   })
@@ -56,9 +57,7 @@ export async function handleModReply(pendingId: string, reply: ModReply): Promis
   let notAnswer = false
 
   const doRelay = async (text: string): Promise<string> => {
-    const step = run.steps.begin('reply', `Answer ${firstName(p.userName)} in ${platformLabel(p.platform)}`, undefined, undefined, [
-      p.platform === 'telegram' ? 'telegram_v5_0.sendmessage.create' : 'slack.chat.postmessage.create',
-    ])
+    const step = run.steps.begin('reply', `Answer ${firstName(p.userName)} in ${platformLabel(p.platform)}`, undefined, undefined, sendTools(p.platform))
     relayed = await relay(p, text, run.id)
     if (relayed) {
       step.ok(text.slice(0, 200), { text })
@@ -174,7 +173,7 @@ export function registerLearningFollowUps(): void {
     creditHelper(meta.platform, meta.helper, a.simulated)
     await post(meta.platform, meta.chatId, `📚 Saved ${firstName(meta.helper)}'s answer to the community FAQ, thanks ${firstName(meta.helper)}!`, {
       runId: a.runId,
-      replyToId: meta.platform === 'telegram' ? meta.msgId : undefined,
+      replyToId: quotesReplies(meta.platform) ? meta.msgId : undefined,
       threadTs: meta.platform === 'slack' ? meta.threadTs ?? meta.msgId : undefined,
       simulated: a.simulated,
     })

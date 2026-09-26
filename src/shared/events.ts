@@ -2,7 +2,7 @@
 // Every event the server emits on the bus is one of these, and the dashboard
 // renders purely from this stream plus the /api/state snapshot.
 
-export type Platform = 'telegram' | 'slack' | 'web'
+export type Platform = 'telegram' | 'slack' | 'whatsapp' | 'web'
 export type ChatType = 'group' | 'dm' | 'web'
 
 export interface InboundMessage {
@@ -98,7 +98,7 @@ export interface RunSummary {
   model?: string
 }
 
-export type ServiceName = 'telegram' | 'slack' | 'notion' | 'resend' | 'llm' | 'swytchcode'
+export type ServiceName = 'telegram' | 'slack' | 'whatsapp' | 'notion' | 'resend' | 'llm' | 'swytchcode'
 export interface ServiceStatus {
   state: 'up' | 'degraded' | 'down' | 'disabled'
   detail?: string
@@ -288,6 +288,27 @@ export interface NotifyState {
   tunnel: 'off' | 'starting' | 'up' | 'down'
 }
 
+// ── WhatsApp (linked device via Baileys) ────────────────────────────────────
+
+export interface WhatsAppGroup {
+  jid: string
+  name: string
+  size: number
+  /** Pulse only listens and replies in groups the organizer turned on */
+  enabled: boolean
+}
+
+export interface WhatsAppState {
+  status: 'off' | 'connecting' | 'qr' | 'connected' | 'logged_out'
+  /** pairing QR as a data URL, while status is 'qr' */
+  qr?: string
+  /** the linked account (Pulse speaks as this number) */
+  me?: { name?: string; number?: string }
+  groups: WhatsAppGroup[]
+  /** answer DMs from members of an enabled group */
+  dms: boolean
+}
+
 export interface PendingQuestion {
   id: string
   platform: Platform
@@ -347,6 +368,7 @@ export type GtEvent =
   | { type: 'scenario'; ts: number; state: ScenarioState }
   | { type: 'case'; ts: number; item: MemberCase }
   | { type: 'notify'; ts: number; state: NotifyState; sent?: { channel: 'email' | 'push'; ok: boolean; detail: string } }
+  | { type: 'whatsapp'; ts: number; state: WhatsAppState }
   | { type: 'log'; ts: number; level: 'info' | 'warn' | 'error'; text: string }
 
 /** Monotonic id attached by the server so clients can resume (poll transport). */
@@ -379,6 +401,7 @@ export interface StateSnapshot {
   pending: PendingQuestion[]
   cases: MemberCase[]
   notify: NotifyState
+  whatsapp: WhatsAppState
   helpers: Helper[]
   guardrails: Array<Extract<GtEvent, { type: 'guardrail' }>>
   selftest: SelfTestResult[]

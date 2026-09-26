@@ -8,7 +8,7 @@ import type { Approval, ApprovalAction, ApprovalKind, Platform, SwyHold } from '
 import { getDoc, listDocs, putDoc } from '../store/repo.js'
 import { withOutbox } from '../store/outbox.js'
 import { swyAuditPolicy, swyExec, SwyError } from '../swy/exec.js'
-import { redactDeep } from '../swy/redact.js'
+import { containsSecret, redactDeep } from '../swy/redact.js'
 import { channels, post, reportBlock } from './channels.js'
 import { modsAvailable, modsChannel, postModsCard } from './mods.js'
 
@@ -29,11 +29,24 @@ export const TOOL = {
   notionCreate: 'notion.page.create',
   notionUpdate: 'notion.page.update',
   email: 'resend.email.create',
+  /** not a Swytchcode tool: the linked WhatsApp device sends it */
+  waSend: 'whatsapp.send',
 } as const
 
 // ── action builders (args exactly as they will be sent) ────────────────────
 
 export function postAction(platform: Platform, chatId: string, text: string, label: string, opts: { pin?: boolean; threadTs?: string } = {}): ApprovalAction {
+  if (platform === 'whatsapp') {
+    const where = channels.whatsapp?.groupName(chatId) ?? chatId
+    return {
+      tool: TOOL.waSend,
+      label,
+      args: { to: chatId, text: formatFor('whatsapp', text) },
+      preview: { method: 'SEND', url: `WhatsApp · ${where}`, body: { text: `${env.WHATSAPP_PREFIX}${formatFor('whatsapp', text)}` } },
+      ...(containsSecret(text) ? { blocked: 'secret: the message contains a secret-like token' } : {}),
+      meta: { platform, chatId, text },
+    }
+  }
   if (platform === 'telegram') {
     return {
       tool: TOOL.tgSend,
@@ -91,6 +104,8 @@ export function pollAction(chatId: string, question: string, options: string[], 
 // ── preview ────────────────────────────────────────────────────────────────
 
 export async function previewAction(a: ApprovalAction, runId?: string): Promise<ApprovalAction> {
+  // WhatsApp isn't a Swytchcode call: the preview is the message itself.
+  if (a.tool === TOOL.waSend) return a
   // The Notion parent id is filled at execution time; preview the real shape.
   if (a.tool === TOOL.notionCreate) return { ...a, preview: { method: 'POST', url: 'https://api.notion.com/v1/pages', body: redactDeep((a.args as { body: unknown }).body) } }
   if (a.tool === TOOL.notionUpdate) {
@@ -230,7 +245,7 @@ async function executeAction(a: Approval, action: ApprovalAction, i: number): Pr
   const key = `${a.id}:${i}`
   const meta = (action.meta ?? {}) as { platform?: Platform; chatId?: string; text?: string; threadTs?: string; replyToId?: string; entry?: NewEntry; entryId?: string; patch?: Partial<NewEntry> }
   try {
-    if ((action.tool === TOOL.tgSend || action.tool === TOOL.slackPost) && meta.platform && meta.chatId && meta.text) {
+    if ((action.tool === TOOL.tgSend || action.tool === TOOL.slackPost || action.tool === TOOL.waSend) && meta.platform && meta.chatId && meta.text) {
       const res = await post(meta.platform, meta.chatId, meta.text, { key, runId: a.runId, threadTs: meta.threadTs, replyToId: meta.replyToId, simulated: a.simulated })
       if (!res.ok) return { ...action, ok: false, result: res.blocked ? `blocked by ${res.blocked.policyId ?? res.blocked.kind}` : res.error }
       const posted = `posted${res.msgId ? ` (${res.msgId})` : ''}`

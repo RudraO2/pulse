@@ -39,6 +39,13 @@ export interface AppHandlers {
   }
   /** notification buttons: signed per item, no token needed */
   quick?: (id: string, action: string, sig: string) => Promise<{ ok: boolean; error?: string; status?: number } & Record<string, unknown>>
+  whatsapp?: {
+    link: () => Promise<unknown>
+    logout: () => Promise<unknown>
+    refresh: () => Promise<unknown>
+    setGroup: (jid: string, enabled: boolean) => Promise<unknown>
+    setDms: (enabled: boolean) => Promise<unknown>
+  }
   onDemo?: (action: 'play' | 'pause' | 'resume' | 'stop' | 'reset' | 'speed', body: Record<string, unknown>) => Promise<unknown>
 }
 
@@ -216,6 +223,20 @@ export function createApp(opts: AppOptions): Hono {
   app.post('/api/sweep', requireAdmin, c => call(opts.onSweep, c))
   app.post('/api/kb/sync', requireAdmin, c => call(opts.onKbSync, c))
   app.get('/api/guardrails', requireReader, c => call(opts.guardrails, c))
+
+  // ── WhatsApp (linked device) ──────────────────────────────────────────────
+  app.post('/api/whatsapp/link', requireAdmin, c => call(opts.whatsapp?.link, c))
+  app.post('/api/whatsapp/logout', requireAdmin, c => call(opts.whatsapp?.logout, c))
+  app.post('/api/whatsapp/refresh', requireAdmin, c => call(opts.whatsapp?.refresh, c))
+  app.post('/api/whatsapp/groups', requireAdmin, async c => {
+    const body = await readJson(c)
+    if (typeof body.jid !== 'string' || !body.jid.endsWith('@g.us')) return c.json({ error: 'group jid required' }, 400)
+    return call(opts.whatsapp && (() => opts.whatsapp!.setGroup(String(body.jid), body.enabled === true)), c)
+  })
+  app.post('/api/whatsapp/dms', requireAdmin, async c => {
+    const body = await readJson(c)
+    return call(opts.whatsapp && (() => opts.whatsapp!.setDms(body.enabled === true)), c)
+  })
   app.get('/api/audit', requireReader, c => call(opts.audit, c))
 
   // ── phone app ─────────────────────────────────────────────────────────────
