@@ -12,7 +12,7 @@ export function timeAgo(ts: number, now = Date.now()): string {
 }
 
 export function clock(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 }
 
 export function ms(n?: number): string {
@@ -21,6 +21,9 @@ export function ms(n?: number): string {
   if (n < 60_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)} s`
   return `${Math.floor(n / 60_000)}m ${Math.round((n % 60_000) / 1000)}s`
 }
+
+/** "anthropic:claude-haiku-4-5-20251001" → "claude-haiku-4-5-20251001" */
+export const modelName = (m?: string) => m?.replace(/^[a-z-]+:/i, '')
 
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/)

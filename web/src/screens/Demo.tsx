@@ -1,30 +1,68 @@
 import clsx from 'clsx'
-import { CirclePlay, Pause, Play, RotateCcw, Square } from 'lucide-react'
+import { CircleCheck, CircleDashed, CircleX, Pause, Play, RotateCcw, Square } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import type { ServiceName } from '@shared/events'
+import { ActivityRow } from '../components/ActivityRow'
 import { api, type ScenarioInfo } from '../lib/api'
 import { useStore } from '../lib/store'
-import { Badge, Button, Card, PageHeader, Segmented } from '../ui/primitives'
-import { ActivityRow } from './Overview'
+import { Badge, Button, Card, CardHeader, PageHeader, Segmented } from '../ui/primitives'
+
+const CHECKS: Array<{ service: ServiceName; label: string }> = [
+  { service: 'telegram', label: 'Telegram' },
+  { service: 'slack', label: 'Slack' },
+  { service: 'notion', label: 'Notion knowledge base' },
+  { service: 'llm', label: 'Language models' },
+  { service: 'swytchcode', label: 'Swytchcode' },
+  { service: 'resend', label: 'Resend email' },
+]
+
+function BeforeYouPresent() {
+  const services = useStore((s) => s.services)
+  const selftest = useStore((s) => s.selftest)
+  const passed = selftest.filter((r) => r.ok).length
+  const rows = [
+    ...CHECKS.map((c) => ({ label: c.label, state: services[c.service]?.state ?? 'disabled', detail: services[c.service]?.detail })),
+    { label: 'Guardrail self-test', state: !selftest.length ? 'disabled' : passed === selftest.length ? 'up' : 'down', detail: selftest.length ? `${passed}/${selftest.length}` : 'not run' },
+  ]
+  const ready = rows.every((r) => r.state === 'up')
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader title={<span className="flex items-center gap-2">Checklist{ready && <CircleCheck className="size-4 text-ok" />}</span>} />
+      <ul className="divide-y divide-line">
+        {rows.map((r) => (
+          <li key={r.label} className="flex items-center gap-2.5 px-5 py-2.5 text-[13px]" title={r.detail}>
+            {r.state === 'up' ? <CircleCheck className="size-4 shrink-0 text-ok" /> : r.state === 'disabled' ? <CircleDashed className="size-4 shrink-0 text-fg-4" /> : <CircleX className={clsx('size-4 shrink-0', r.state === 'down' ? 'text-bad' : 'text-warn')} />}
+            <span className="min-w-0 flex-1 text-fg-2">{r.label}</span>
+            <span className="max-w-[45%] truncate text-[12px] text-fg-4">{r.state === 'up' ? r.detail ?? 'ready' : r.state}</span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
 
 export function DemoScreen() {
   const [scenarios, setScenarios] = useState<ScenarioInfo[]>([])
   const [speed, setSpeed] = useState<'1' | '1.5' | '2'>('1')
   const [resetting, setResetting] = useState(false)
   const sc = useStore((s) => s.scenario)
-  const runs = useStore((s) => s.runs.filter((r) => r.simulated).slice(0, 8))
+  const runs = useStore((s) => s.runs.filter((r) => r.simulated).slice(0, 5))
 
   useEffect(() => {
     void api.scenarios().then((s) => s && setScenarios(s))
   }, [])
 
   const running = sc.status === 'running' || sc.status === 'paused'
-  const pct = sc.beats ? Math.round((sc.beat / sc.beats) * 100) : 0
+  const featured = scenarios.find((s) => s.id === 'full') ?? scenarios[0]
+  const rest = scenarios.filter((s) => s !== featured)
+  const play = (id: string) => void api.demo('play', { id, speed: Number(speed) })
+  const stage = running || sc.status === 'done'
 
   return (
     <div className="animate-fade-in">
       <PageHeader
         title="Demo"
-        subtitle="Scripted members post into the real Slack channel. Only the members are fake: every Pulse reaction is the real agent, real LLM, real Swytchcode calls and real Notion writes."
+        meta="Scripted members · real agent"
         actions={
           <>
             <Segmented
@@ -49,72 +87,91 @@ export function DemoScreen() {
                 setResetting(false)
               }}
             >
-              Reset demo data
+              Reset
             </Button>
           </>
         }
       />
 
-      {running || sc.status === 'done' ? (
-        <Card className="mb-6 overflow-hidden">
-          <div className="flex flex-wrap items-center gap-4 px-6 py-5">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="label">{sc.status === 'done' ? 'Finished' : sc.status === 'paused' ? 'Paused' : 'Now playing'}</span>
-                <Badge tone="accent">{sc.title}</Badge>
-              </div>
-              <p className="mt-2 text-[17px] leading-snug font-medium text-fg">{sc.caption ?? '…'}</p>
+      {stage && (
+      <section className="card mb-5 overflow-hidden">
+        <div className={clsx('grid gap-5 px-6 sm:grid-cols-[minmax(0,1fr)_auto]', stage ? 'py-5' : 'items-center py-4')}>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="label">{sc.status === 'done' ? 'Finished' : sc.status === 'paused' ? 'Paused' : running ? 'Now playing' : 'Ready'}</span>
+              {(stage ? sc.title : featured?.title) && <Badge tone="accent">{stage ? sc.title : featured?.title}</Badge>}
             </div>
-            {running && (
-              <div className="flex items-center gap-2">
+            {stage && (
+              <p className={clsx('display mt-2.5 text-[clamp(20px,2.4vw,28px)] leading-tight font-semibold text-fg', running && 'min-h-[2.5em]')}>
+                {running ? sc.caption ?? 'Starting…' : 'Finished.'}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-start gap-2 sm:justify-end">
+            {running ? (
+              <>
                 <Button icon={sc.status === 'paused' ? <Play className="size-3.5" /> : <Pause className="size-3.5" />} onClick={() => void api.demo(sc.status === 'paused' ? 'resume' : 'pause')}>
                   {sc.status === 'paused' ? 'Resume' : 'Pause'}
                 </Button>
                 <Button variant="ghost" icon={<Square className="size-3.5" />} onClick={() => void api.demo('stop')}>
                   Stop
                 </Button>
-              </div>
+              </>
+            ) : (
+              featured && (
+                <Button variant="go" icon={<Play className="size-3.5" />} onClick={() => play(featured.id)}>
+                  Play {featured.title.toLowerCase()}
+                </Button>
+              )
             )}
           </div>
-          <div className="h-1 bg-subtle">
-            <div className={clsx('h-full bg-accent transition-all duration-500')} style={{ width: `${pct}%` }} />
-          </div>
-        </Card>
-      ) : null}
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {scenarios.map((s) => (
-          <Card key={s.id} className={clsx('flex flex-col p-5', s.id === 'full' && 'ring-1 ring-accent/30 sm:col-span-2 xl:col-span-1')}>
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="text-[14px] font-semibold text-fg">{s.title}</h3>
-              {s.id === 'full' && <Badge tone="accent">2.5 min</Badge>}
-            </div>
-            <p className="mt-1.5 flex-1 text-[12.5px] leading-relaxed text-fg-3">{s.description}</p>
-            <div className="mt-3 flex flex-wrap gap-1">
-              {s.shows.map((x) => (
-                <Badge key={x}>{x}</Badge>
-              ))}
-            </div>
-            <div className="mt-4 flex items-center justify-between">
-              <span className="text-[11px] text-fg-4">{s.beats} beats</span>
-              <Button size="sm" variant={s.id === 'full' ? 'primary' : 'secondary'} icon={<CirclePlay className="size-3.5" />} disabled={running} onClick={() => void api.demo('play', { id: s.id, speed: Number(speed) })}>
-                Play
-              </Button>
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {runs.length > 0 && (
-        <Card className="mt-6 overflow-hidden">
-          <div className="border-b border-line px-5 py-3 text-[13px] font-semibold">What Pulse did in the scripted community</div>
-          <div className="divide-y divide-line">
-            {runs.map((r) => (
-              <ActivityRow key={r.runId} run={r} />
+        </div>
+        {stage && sc.beats > 0 && (
+          <div className="flex gap-[3px] px-6 pb-5" aria-label={`Beat ${sc.beat} of ${sc.beats}`}>
+            {Array.from({ length: sc.beats }, (_, i) => (
+              <span key={i} className={clsx('h-[5px] flex-1 rounded-full transition-colors duration-300', sc.status === 'done' || i < sc.beat ? 'bg-accent' : i === sc.beat && sc.status === 'running' ? 'animate-pulse-dot bg-accent/60' : 'bg-line')} />
             ))}
           </div>
-        </Card>
+        )}
+      </section>
       )}
+
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid min-w-0 grid-cols-1 gap-5">
+          {featured && (
+            <Card className="overflow-hidden">
+              <CardHeader title="Scenarios" />
+              <ul className="divide-y divide-line">
+                {[featured, ...rest].map((s) => (
+                  <li key={s.id} className="flex items-center gap-4 px-5 py-3" title={s.description}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[14px] font-medium text-fg">{s.title}</span>
+                        {s.id === 'full' && <Badge tone="accent">2.5 min</Badge>}
+                      </div>
+                    </div>
+                    <span className="hidden text-[11.5px] whitespace-nowrap text-fg-4 sm:block">{s.beats} beats</span>
+                    <Button size="sm" variant={s.id === 'full' ? 'go' : 'secondary'} icon={<Play className="size-3" />} disabled={running} onClick={() => play(s.id)}>
+                      Play
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+          {runs.length > 0 && (
+            <Card className="overflow-hidden">
+              <CardHeader title="Scripted activity" />
+              <div className="divide-y divide-line">
+                {runs.map((r) => (
+                  <ActivityRow key={r.runId} run={r} />
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+        <BeforeYouPresent />
+      </div>
     </div>
   )
 }

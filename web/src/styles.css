@@ -3,11 +3,13 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ── Design tokens ──────────────────────────────────────────────────────────
-   Neutral zinc surfaces, one indigo accent, semantic status colours used
-   sparingly. Every colour is a CSS variable so light/dark swap in one place. */
+   Cool paper ground, graphite ink. Cobalt means "Pulse did this", teal means
+   knowledge (Notion). Status colours are reserved for state. Light is the
+   default; `.dark` on <html> swaps every token in one place. */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Bricolage Grotesque', 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
 
   --color-bg: var(--bg);
   --color-surface: var(--surface);
@@ -22,6 +24,9 @@
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+  --color-teal: var(--teal);
+  --color-teal-soft: var(--teal-soft);
   --color-ok: var(--ok);
   --color-ok-soft: var(--ok-soft);
   --color-warn: var(--warn);
@@ -35,13 +40,14 @@
   --animate-slide-in: slide-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
   --animate-pulse-dot: pulse-dot 1.8s ease-in-out infinite;
   --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pop: pop 0.16s ease-out both;
 
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: none; }
   }
   @keyframes slide-in {
-    from { opacity: 0; transform: translateX(16px); }
+    from { opacity: 0; transform: translateX(20px); }
     to { opacity: 1; transform: none; }
   }
   @keyframes pulse-dot {
@@ -52,55 +58,71 @@
     0% { background-position: -200% 0; }
     100% { background-position: 200% 0; }
   }
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(-6px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
 }
 
 :root {
-  --bg: #fafafa;
+  --bg: #f5f6f8;
   --surface: #ffffff;
-  --subtle: #f4f4f5;
-  --hover: #f4f4f5;
-  --line: #e4e4e7;
-  --line-strong: #d4d4d8;
-  --fg: #18181b;
-  --fg-2: #52525b;
-  --fg-3: #71717a;
-  --fg-4: #a1a1aa;
-  --accent: #4f46e5;
+  --subtle: #eef0f3;
+  --hover: #f1f3f6;
+  --line: #e2e5ea;
+  --line-strong: #cdd2db;
+  --fg: #12151b;
+  --fg-2: #414856;
+  --fg-3: #687080;
+  --fg-4: #8a919d;
+  --accent: #2d5bff;
   --accent-fg: #ffffff;
-  --accent-soft: #eef2ff;
-  --ok: #16a34a;
-  --ok-soft: #f0fdf4;
-  --warn: #d97706;
-  --warn-soft: #fffbeb;
-  --bad: #dc2626;
-  --bad-soft: #fef2f2;
-  --info: #0284c7;
-  --info-soft: #f0f9ff;
+  --accent-soft: #edf1ff;
+  --accent-line: #c8d5ff;
+  --teal: #0f8474;
+  --teal-soft: #e3f4f1;
+  --ok: #17804a;
+  --ok-soft: #e6f4ec;
+  --warn: #a36100;
+  --warn-soft: #fcf1de;
+  --bad: #c9372c;
+  --bad-soft: #fbeae8;
+  --info: #2d5bff;
+  --info-soft: #edf1ff;
+  --shadow: 0 1px 2px rgb(18 21 27 / 0.04), 0 8px 24px -8px rgb(18 21 27 / 0.1);
+  --shadow-lg: 0 24px 64px -16px rgb(18 21 27 / 0.28);
+  --scrim: rgb(18 21 27 / 0.28);
   color-scheme: light;
 }
 
 .dark {
-  --bg: #09090b;
-  --surface: #111113;
-  --subtle: #18181b;
-  --hover: #1c1c1f;
-  --line: #27272a;
-  --line-strong: #3f3f46;
-  --fg: #fafafa;
-  --fg-2: #d4d4d8;
-  --fg-3: #a1a1aa;
-  --fg-4: #71717a;
-  --accent: #818cf8;
-  --accent-fg: #0b0b0f;
-  --accent-soft: #1e1b4b;
-  --ok: #4ade80;
-  --ok-soft: #052e16;
-  --warn: #fbbf24;
-  --warn-soft: #2a1d05;
-  --bad: #f87171;
-  --bad-soft: #2a0b0b;
-  --info: #38bdf8;
-  --info-soft: #06202e;
+  --bg: #0b0d11;
+  --surface: #12151b;
+  --subtle: #171b22;
+  --hover: #1a1e26;
+  --line: #232833;
+  --line-strong: #333a47;
+  --fg: #e9ecf1;
+  --fg-2: #bac0cb;
+  --fg-3: #8790a0;
+  --fg-4: #646c7b;
+  --accent: #7b98ff;
+  --accent-fg: #0b0d11;
+  --accent-soft: #172040;
+  --accent-line: #2b3a6e;
+  --teal: #45c4b0;
+  --teal-soft: #0f2926;
+  --ok: #4cc27f;
+  --ok-soft: #0f2519;
+  --warn: #e6a640;
+  --warn-soft: #291e0b;
+  --bad: #f2766b;
+  --bad-soft: #2d1412;
+  --info: #7b98ff;
+  --info-soft: #172040;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-lg: 0 24px 64px -16px rgb(0 0 0 / 0.7);
+  --scrim: rgb(0 0 0 / 0.55);
   color-scheme: dark;
 }
 
@@ -113,7 +135,7 @@
   body {
     margin: 0;
     font-family: var(--font-sans);
-    font-feature-settings: 'cv11', 'ss01';
+    font-size: 14px;
     background: var(--bg);
     color: var(--fg);
     -webkit-font-smoothing: antialiased;
@@ -133,9 +155,14 @@
     cursor: not-allowed;
   }
   :focus-visible {
-    outline: 2px solid color-mix(in oklab, var(--accent) 60%, transparent);
+    outline: 2px solid color-mix(in oklab, var(--accent) 70%, transparent);
     outline-offset: 2px;
     border-radius: 6px;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
   }
 }
 
@@ -147,14 +174,18 @@
   }
   .label {
     font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.04em;
+    font-weight: 600;
+    letter-spacing: 0.07em;
     text-transform: uppercase;
     color: var(--fg-3);
   }
   .mono {
     font-family: var(--font-mono);
     font-size: 12px;
+  }
+  .display {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
   }
   .skeleton {
     background: linear-gradient(90deg, var(--subtle) 25%, var(--hover) 37%, var(--subtle) 63%);
@@ -174,5 +205,78 @@
     border: 1px solid var(--line);
     border-radius: 4px;
     padding: 0 4px;
+  }
+  .prose-msg strong {
+    font-weight: 600;
+  }
+  .avatar {
+    background: hsl(var(--h) 62% 91%);
+    color: hsl(var(--h) 45% 30%);
+  }
+  .dark .avatar {
+    background: hsl(var(--h) 32% 22%);
+    color: hsl(var(--h) 55% 82%);
+  }
+  .kbd {
+    font: 500 10.5px/1 var(--font-mono);
+    padding: 3px 5px;
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    color: var(--fg-3);
+    background: var(--surface);
+  }
+
+  /* Learning loop: a light travels along the track between steps */
+  .loop-track {
+    position: absolute;
+    top: 18px;
+    height: 1.5px;
+    background: var(--line-strong);
+    overflow: hidden;
+  }
+  .loop-track::after {
+    content: '';
+    position: absolute;
+    top: -1.5px;
+    width: 44px;
+    height: 4.5px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, transparent, var(--accent));
+    animation: travel 3.4s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  }
+  @keyframes travel {
+    from { left: -44px; }
+    to { left: 100%; }
+  }
+}
+
+/* Presenter mode: bigger type and an icon-only sidebar, for the projector */
+@media (min-width: 900px) {
+  body.present #shell {
+    zoom: 1.14;
+    height: calc(100% / 1.14);
+  }
+  body.present .side-label {
+    display: none;
+  }
+  body.present #sidebar {
+    width: 64px;
+  }
+  body.present #sidebar .nav-item {
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .loop-track::after {
+    display: none;
   }
 }

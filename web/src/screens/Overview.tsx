@@ -1,224 +1,292 @@
 import clsx from 'clsx'
 import QRCode from 'qrcode'
-import { ArrowUpRight, BookOpen, CircleCheck, Flag, Hand, Hourglass, MessageSquareReply, ShieldCheck, Sparkles, Users, VolumeX, CircleX, Mail, SquareTerminal } from 'lucide-react'
-import { useEffect, useMemo, useState, type ComponentType } from 'react'
+import { ArrowRight, BookOpen, Flag, Repeat, HelpCircle, MessagesSquare, QrCode, Search, ShieldCheck, Sparkles, Users, X, Zap, type LucideIcon } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import type { RunSummary } from '@shared/events'
-import { openRun } from '../components/RunDrawer'
-import { ms, runHeadline, timeAgo, ORIGIN_LABEL } from '../lib/format'
+import type { Counters } from '@shared/events'
+import { ActivityRow } from '../components/ActivityRow'
+import { DecisionButtons } from '../components/ApprovalCard'
+import { clock, ms, timeAgo } from '../lib/format'
 import { useStore } from '../lib/store'
-import { Badge, Card, CardHeader, EmptyState, PageHeader, PlatformIcon, Segmented } from '../ui/primitives'
+import { Button, Card, CardHeader, EmptyState, Metrics, PageHeader, PlatformIcon, Segmented, ShowMore } from '../ui/primitives'
 
-function Stat({ label, value, hint, icon: Icon }: { label: string; value: string | number; hint?: string; icon: ComponentType<{ className?: string }> }) {
+const sum = (a: Counters, b: Counters): Counters => Object.fromEntries(Object.keys(a).map((k) => [k, a[k as keyof Counters] + b[k as keyof Counters]])) as unknown as Counters
+
+function HeaderLink({ to, children }: { to: string; children: ReactNode }) {
   return (
-    <Card className="px-5 py-4">
-      <div className="flex items-center justify-between">
-        <span className="text-[12px] font-medium text-fg-3">{label}</span>
-        <Icon className="size-4 text-fg-4" />
+    <Link to={to} className="inline-flex shrink-0 items-center gap-1 text-[12.5px] font-medium text-fg-3 hover:text-accent">
+      {children} <ArrowRight className="size-3" />
+    </Link>
+  )
+}
+
+/* ── The learning loop: the product's thesis, drawn with today's numbers ── */
+
+function LoopNode({ icon: Icon, n, label, hint, tone }: { icon: LucideIcon; n: number; label: string; hint: string; tone?: 'warn' | 'accent' | 'teal' }) {
+  return (
+    <li className="relative flex flex-col items-start gap-2 pr-2" title={hint}>
+      <span
+        className={clsx(
+          'relative z-10 grid size-9 place-items-center rounded-[10px] border',
+          tone === 'warn' ? 'border-transparent bg-warn-soft text-warn' : tone === 'accent' ? 'border-transparent bg-accent-soft text-accent' : tone === 'teal' ? 'border-transparent bg-teal-soft text-teal' : 'border-line bg-subtle text-fg-3',
+        )}
+      >
+        <Icon className="size-4" />
+      </span>
+      <span className="display text-[24px] leading-none font-semibold text-fg tabular-nums">{n}</span>
+      <span className="text-[12.5px] leading-snug text-fg-3">{label}</span>
+    </li>
+  )
+}
+
+function LearningLoop({ real }: { real: boolean }) {
+  const s = useStore((st) => st)
+  const c = real ? s.counters : sum(s.counters, s.scripted)
+  const pending = s.pending.filter((p) => !real || !p.simulated)
+  const answered = pending.filter((p) => p.status === 'answered')
+  const waiting = pending.filter((p) => p.status === 'waiting').length
+  const learned = s.kb.filter((e) => e.type === 'FAQ' && e.status === 'Live' && e.source !== 'Seed' && (!real || !e.scripted))
+  const members = learned.filter((e) => e.source === 'Member').length
+  const reused = learned.reduce((n, e) => n + e.used, 0)
+
+  // the most recent full loop, told as a story
+  const latest = [...answered].sort((a, b) => (b.answeredAt ?? 0) - (a.answeredAt ?? 0))[0]
+  const entry = latest ? learned.find((e) => e.question.trim().toLowerCase() === latest.question.trim().toLowerCase() || (!!latest.answer && e.answer === latest.answer)) : undefined
+
+  return (
+    <Card>
+      <CardHeader title="Learning loop" action={<HeaderLink to="/knowledge">Knowledge</HeaderLink>} />
+      <div className="px-5 pt-5 pb-5">
+        <ol className="relative grid grid-cols-2 gap-y-5 sm:grid-cols-5">
+          <li className="loop-track hidden sm:block" style={{ left: 18, right: 'calc(20% - 18px)' }} role="presentation" aria-hidden />
+          <LoopNode icon={MessagesSquare} n={c.questions} label="Members asked" hint="Telegram and Slack" />
+          <LoopNode icon={Search} n={c.askedMods} label="Not in Notion" hint="sent to #mods, no guessing" tone="warn" />
+          <LoopNode icon={Users} n={answered.length} label="Organizers answered" hint={waiting ? `${waiting} still waiting` : 'none waiting'} tone="accent" />
+          <LoopNode icon={BookOpen} n={learned.length} label="Saved to Notion" hint={members ? `incl. ${members} member answer${members > 1 ? 's' : ''}` : 'organizer answers'} tone="teal" />
+          <LoopNode icon={Zap} n={reused} label="Reused instantly" hint={s.medianResponseMs ? `answered in ~${ms(s.medianResponseMs)}` : 'no waiting on anyone'} tone="teal" />
+        </ol>
+        <div className="mt-5 flex items-center gap-3 text-teal before:flex-1 before:border-t before:border-dashed before:border-line-strong after:flex-1 after:border-t after:border-dashed after:border-line-strong" title="The next member who asks gets it instantly">
+          <Repeat className="size-3.5" aria-label="Loops back: the next member gets it instantly" />
+        </div>
+        {latest && (
+          <div className="mt-4 rounded-[10px] bg-subtle px-4 py-3">
+            <div className="text-[13.5px] font-medium text-fg">
+              <span className="label mr-2">Latest</span>“{latest.question}”
+            </div>
+            <ol className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12.5px] text-fg-3">
+              <Beat t={latest.askedAt}>{latest.userName.split(' ')[0]} asked</Beat>
+              <Beat t={latest.askedAt} arrow>
+                asked #mods
+              </Beat>
+              {latest.answeredAt && (
+                <Beat t={latest.answeredAt} arrow>
+                  {latest.answeredBy ?? 'An organizer'} answered
+                </Beat>
+              )}
+              {entry && (
+                <Beat t={entry.createdAt} arrow>
+                  saved to Notion
+                </Beat>
+              )}
+              {entry && entry.used > 0 && (
+                <Beat arrow>
+                  reused {entry.used}×
+                </Beat>
+              )}
+            </ol>
+          </div>
+        )}
       </div>
-      <div className="mt-2 text-[28px] leading-none font-semibold tracking-tight text-fg tabular-nums">{value}</div>
-      {hint && <div className="mt-2 text-[12px] text-fg-3">{hint}</div>}
     </Card>
   )
 }
 
-const OUTCOME_ICON: Record<string, { icon: ComponentType<{ className?: string }>; tone: string }> = {
-  answered: { icon: MessageSquareReply, tone: 'text-ok bg-ok-soft' },
-  welcomed: { icon: Hand, tone: 'text-accent bg-accent-soft' },
-  asked_mods: { icon: Users, tone: 'text-warn bg-warn-soft' },
-  escalated: { icon: Flag, tone: 'text-bad bg-bad-soft' },
-  learned: { icon: BookOpen, tone: 'text-ok bg-ok-soft' },
-  proposed: { icon: BookOpen, tone: 'text-warn bg-warn-soft' },
-  silent: { icon: VolumeX, tone: 'text-fg-4 bg-subtle' },
-  awaiting_approval: { icon: Hourglass, tone: 'text-warn bg-warn-soft' },
-  executed: { icon: CircleCheck, tone: 'text-ok bg-ok-soft' },
-  reported: { icon: Mail, tone: 'text-accent bg-accent-soft' },
-  failed: { icon: CircleX, tone: 'text-bad bg-bad-soft' },
+function Beat({ t, arrow, children }: { t?: number; arrow?: boolean; children: ReactNode }) {
+  return (
+    <li className="flex items-center gap-1.5">
+      {arrow && <ArrowRight className="size-3 text-fg-4" />}
+      {t && <time className="font-mono text-[11.5px] text-fg-4">{clock(t)}</time>}
+      {children}
+    </li>
+  )
 }
 
-export function ActivityRow({ run }: { run: RunSummary }) {
-  const o = run.outcome ? OUTCOME_ICON[run.outcome] : undefined
-  const Icon = o?.icon ?? (run.origin === 'console' ? SquareTerminal : Sparkles)
+/* ── Needs you: the top of the inbox, actionable in place ── */
+
+function NeedsYou() {
+  const approvals = useStore((s) => s.approvals.filter((a) => a.status === 'pending'))
+  const attention = useStore((s) => s.attention.filter((a) => a.status === 'open'))
+  const waiting = useStore((s) => s.pending.filter((p) => p.status === 'waiting'))
+  const rows: Array<{ key: string; icon: LucideIcon; tone: string; title: string; meta: string; action?: ReactNode }> = [
+    ...approvals.map((a) => ({ key: a.id, icon: ShieldCheck, tone: 'bg-warn-soft text-warn', title: a.title, meta: `${a.actions.length} request${a.actions.length === 1 ? '' : 's'} previewed · ${timeAgo(a.createdAt)}`, action: <DecisionButtons a={a} /> })),
+    ...attention.map((a) => ({ key: a.id, icon: Flag, tone: a.kind === 'frustrated' ? 'bg-bad-soft text-bad' : 'bg-warn-soft text-warn', title: `${a.userName} · ${a.kind.replace('_', ' ')}`, meta: a.reason })),
+    ...waiting.map((p) => ({ key: p.id, icon: HelpCircle, tone: 'bg-accent-soft text-accent', title: `“${p.question}”`, meta: `${p.userName} · waiting on organizers ${timeAgo(p.askedAt).replace(' ago', '')}` })),
+  ]
+  const shown = rows.slice(0, 3)
+  const more = rows.length - shown.length
   return (
-    <button onClick={() => openRun(run.runId)} className="flex w-full items-center gap-3 px-5 py-2.5 text-left transition-colors hover:bg-hover">
-      <span className={clsx('grid size-7 shrink-0 place-items-center rounded-lg', o?.tone ?? 'bg-accent-soft text-accent')}>
-        <Icon className={clsx('size-3.5', !run.outcome && 'animate-pulse')} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] text-fg">{runHeadline(run)}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg-4">
-          {run.platform && <PlatformIcon platform={run.platform} className="size-3" />}
-          <span>{ORIGIN_LABEL[run.origin]}</span>
-          <span>·</span>
-          <span>{timeAgo(run.startedAt)}</span>
-          {run.durationMs !== undefined && (
-            <>
-              <span>·</span>
-              <span className="tabular-nums">{ms(run.durationMs)}</span>
-            </>
+    <Card className="overflow-hidden">
+      <CardHeader title={<span className="flex items-center gap-2">Needs you{rows.length > 0 && <span className="grid h-[18px] min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-fg tabular-nums">{rows.length}</span>}</span>} action={<HeaderLink to="/inbox">Inbox</HeaderLink>} />
+      {shown.length ? (
+        <ul className="divide-y divide-line">
+          {shown.map((r) => (
+            <li key={r.key} className="grid grid-cols-[30px_minmax(0,1fr)] gap-3 px-5 py-3.5">
+              <span className={clsx('grid size-[30px] place-items-center rounded-lg', r.tone)}>
+                <r.icon className="size-3.5" />
+              </span>
+              <div className="min-w-0">
+                <div className="line-clamp-2 text-[13.5px] leading-snug font-medium text-fg">{r.title}</div>
+                <div className="mt-0.5 truncate text-[12px] text-fg-3">{r.meta}</div>
+                {r.action && <div className="mt-2.5">{r.action}</div>}
+              </div>
+            </li>
+          ))}
+          {more > 0 && (
+            <li>
+              <Link to="/inbox" className="block py-2.5 text-center text-[12.5px] font-medium text-fg-3 hover:bg-hover hover:text-fg">
+                {more} more in the Inbox
+              </Link>
+            </li>
           )}
-        </div>
-      </div>
-      {run.simulated && <Badge tone="info">Scripted</Badge>}
-    </button>
+        </ul>
+      ) : (
+        <EmptyState className="!py-9" title="All clear" />
+      )}
+    </Card>
   )
 }
 
-function Sparkline({ points }: { points: number[] }) {
-  if (points.length < 2) return <div className="h-12" />
-  const max = Math.max(...points)
-  const min = Math.min(...points)
-  const w = 240
-  const h = 48
-  const xy = points.map((p, i) => [(i / (points.length - 1)) * w, h - 4 - ((p - min) / (max - min || 1)) * (h - 8)] as const)
-  const d = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-12 w-full" preserveAspectRatio="none">
-      <path d={`${d} L${w},${h} L0,${h} Z`} fill="var(--accent)" opacity="0.08" />
-      <path d={d} fill="none" stroke="var(--accent)" strokeWidth="1.75" vectorEffect="non-scaling-stroke" />
-    </svg>
-  )
-}
+/* ── Invite: QR codes live behind one button until you need them ── */
 
 function Qr({ url, label, platform }: { url?: string; label: string; platform: 'telegram' | 'slack' }) {
   const [src, setSrc] = useState<string>()
   useEffect(() => {
-    if (url) void QRCode.toDataURL(url, { margin: 0, width: 220, color: { dark: '#18181b', light: '#ffffff' } }).then(setSrc)
+    if (url) void QRCode.toDataURL(url, { margin: 0, width: 280, color: { dark: '#12151b', light: '#ffffff' } }).then(setSrc)
   }, [url])
   if (!url) return null
   return (
-    <a href={url} target="_blank" rel="noreferrer" className="group flex flex-col items-center gap-2 rounded-xl border border-line p-3 transition-colors hover:bg-hover">
-      {src ? <img src={src} alt={`${label} QR`} className="size-24 rounded-md bg-white p-1.5" /> : <div className="skeleton size-24" />}
-      <span className="flex items-center gap-1.5 text-[12px] font-medium text-fg-2">
-        <PlatformIcon platform={platform} /> {label}
+    <a href={url} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-3 rounded-xl border border-line p-4 transition-colors hover:bg-hover">
+      {src ? <img src={src} alt={`${label} QR code`} className="size-40 rounded-lg bg-white p-2" /> : <div className="skeleton size-40" />}
+      <span className="flex items-center gap-1.5 text-[13px] font-medium text-fg-2">
+        <PlatformIcon platform={platform} /> Join on {label}
       </span>
     </a>
   )
 }
 
+function InviteDialog({ onClose }: { onClose: () => void }) {
+  const links = useStore((s) => s.links)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div className="fixed inset-0 z-40 grid place-items-center p-4">
+      <div className="absolute inset-0 animate-fade-in bg-[var(--scrim)]" onClick={onClose} />
+      <div className="card relative w-full max-w-[520px] animate-pop p-6 shadow-[var(--shadow-lg)]" role="dialog" aria-label="Invite members">
+        <button onClick={onClose} className="absolute top-4 right-4 rounded-md p-1 text-fg-3 hover:bg-hover hover:text-fg" aria-label="Close">
+          <X className="size-4" />
+        </button>
+        <h2 className="display text-[22px] font-semibold text-fg">Scan to ask Pulse</h2>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <Qr url={links.telegramJoinUrl} label="Telegram" platform="telegram" />
+          <Qr url={links.slackInviteUrl} label="Slack" platform="slack" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ── Screen ── */
+
 export function OverviewScreen() {
-  const [view, setView] = useState<'real' | 'demo'>('real')
+  const [view, setView] = useState<'real' | 'all'>('all')
+  const [more, setMore] = useState(false)
+  const [invite, setInvite] = useState(false)
   const s = useStore((st) => st)
-  const c = view === 'real' ? s.counters : s.scripted
-  const runs = s.runs.filter((r) => (view === 'real' ? !r.simulated : true)).filter((r) => r.outcome !== 'silent' || r.origin !== 'community').slice(0, 14)
-  const liveKb = s.kb.filter((e) => e.status === 'Live' && e.type === 'FAQ')
-  const learned = liveKb.filter((e) => e.source !== 'Seed')
-  const growth = useMemo(() => {
-    const sorted = [...liveKb].sort((a, b) => a.createdAt - b.createdAt)
-    return sorted.map((_, i) => i + 1)
-  }, [liveKb])
-  const needs = {
-    approvals: s.approvals.filter((a) => a.status === 'pending').length,
-    waiting: s.pending.filter((p) => p.status === 'waiting').length,
-    flagged: s.attention.filter((a) => a.status === 'open').length,
-  }
-  const answeredPct = c.questions ? Math.round((c.answered / c.questions) * 100) : 0
+  const real = view === 'real'
+  const c = real ? s.counters : sum(s.counters, s.scripted)
+  const learned = useMemo(() => s.kb.filter((e) => e.type === 'FAQ' && e.status === 'Live' && e.source !== 'Seed' && (!real || !e.scripted)), [s.kb, real])
+  const reused = learned.reduce((n, e) => n + e.used, 0)
+  const runs = s.runs.filter((r) => !real || !r.simulated).filter((r) => r.outcome !== 'silent' || r.origin !== 'community')
+  const shownRuns = runs.slice(0, more ? 20 : 6)
+  const pct = c.questions ? Math.round((c.answered / c.questions) * 100) : 0
+  const canInvite = !!(s.links.telegramJoinUrl || s.links.slackInviteUrl)
 
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Overview"
-        subtitle={
-          <>
-            {s.community.about} <span className="text-fg-4">· live since {new Date(s.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-          </>
-        }
+        title="Today"
         actions={
-          <Segmented
-            value={view}
-            onChange={setView}
-            options={[
-              { value: 'real', label: 'Real members' },
-              { value: 'demo', label: 'Incl. scripted' },
-            ]}
-          />
+          <>
+            {canInvite && (
+              <Button icon={<QrCode className="size-3.5" />} onClick={() => setInvite(true)}>
+                Invite
+              </Button>
+            )}
+            <Segmented
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'real', label: 'Real' },
+                { value: 'all', label: 'All' },
+              ]}
+            />
+          </>
         }
       />
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Active members" value={c.members} hint={`${c.messages} messages`} icon={Users} />
-        <Stat label="Questions answered" value={c.answered} hint={c.questions ? `${answeredPct}% of ${c.questions} questions` : 'no questions yet'} icon={MessageSquareReply} />
-        <Stat label="Median response" value={s.medianResponseMs ? ms(s.medianResponseMs) : '–'} hint="question → answer in chat" icon={Sparkles} />
-        <Stat label="Answers learned" value={learned.length} hint={`${liveKb.length} entries in Notion`} icon={BookOpen} />
-      </div>
+      <Metrics
+        items={[
+          { label: 'Active members', value: c.members, hint: `${c.messages} messages` },
+          { label: 'Answered', value: c.questions ? pct : '–', unit: c.questions ? '%' : undefined, hint: c.questions ? `${c.answered} of ${c.questions}` : undefined },
+          { label: 'Median response', value: s.medianResponseMs ? (s.medianResponseMs / 1000).toFixed(1) : '–', unit: s.medianResponseMs ? 's' : undefined },
+          { label: 'Learned', value: learned.length, hint: reused ? <><span className="font-medium text-ok">+{reused}</span> reused</> : undefined },
+        ]}
+      />
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <Card className="overflow-hidden">
-          <CardHeader title="Live activity" subtitle="Every decision Pulse made. Click one to see the full trace." action={<Link to="/conversations" className="text-[12px] font-medium text-fg-3 hover:text-fg">Conversations →</Link>} />
-          {runs.length ? (
-            <div className="divide-y divide-line">
-              {runs.map((r) => (
-                <ActivityRow key={r.runId} run={r} />
-              ))}
-            </div>
-          ) : (
-            <EmptyState icon={<Sparkles className="size-4" />} title="Waiting for the community" hint="Messages in Telegram or Slack show up here as Pulse handles them. Try a scripted scenario from the Demo page." action={<Link to="/demo" className="text-[12px] font-medium text-accent">Open Demo →</Link>} />
-          )}
-        </Card>
+      <div className="mt-5 grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid min-w-0 grid-cols-1 gap-5">
+          <LearningLoop real={real} />
+          <Card className="overflow-hidden">
+            <CardHeader title="Activity" action={<HeaderLink to="/conversations">Conversations</HeaderLink>} />
+            {shownRuns.length ? (
+              <>
+                <div className="divide-y divide-line">
+                  {shownRuns.map((r) => (
+                    <ActivityRow key={r.runId} run={r} />
+                  ))}
+                </div>
+                {runs.length > 6 && <ShowMore open={more} onToggle={() => setMore((m) => !m)} more={`Show ${Math.min(runs.length, 20) - 6} more`} />}
+              </>
+            ) : (
+              <EmptyState icon={<Sparkles className="size-4" />} title="No activity yet" action={<HeaderLink to="/demo">Play a demo</HeaderLink>} />
+            )}
+          </Card>
+        </div>
 
-        <div className="space-y-6">
-          <Card>
-            <CardHeader title="Needs you" action={<Link to="/inbox" className="text-[12px] font-medium text-fg-3 hover:text-fg">Inbox →</Link>} />
+        <div className="grid min-w-0 grid-cols-1 gap-5">
+          <NeedsYou />
+          <Card className="overflow-hidden">
+            <CardHeader title="Swytchcode" action={<HeaderLink to="/guardrails">Guardrails</HeaderLink>} />
             <div className="grid grid-cols-3 divide-x divide-line">
               {[
-                ['Approvals', needs.approvals],
-                ['Waiting', needs.waiting],
-                ['Flagged', needs.flagged],
-              ].map(([label, n]) => (
-                <Link to="/inbox" key={label} className="px-4 py-4 text-center hover:bg-hover">
-                  <div className={clsx('text-xl font-semibold tabular-nums', Number(n) ? 'text-fg' : 'text-fg-4')}>{n}</div>
-                  <div className="mt-0.5 text-[11px] text-fg-3">{label}</div>
-                </Link>
-              ))}
-            </div>
-          </Card>
-
-          <Card>
-            <CardHeader title="Knowledge base" subtitle="Notion, kept in sync every minute" action={<Link to="/knowledge" className="text-[12px] font-medium text-fg-3 hover:text-fg">Open →</Link>} />
-            <div className="px-5 pt-4 pb-3">
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-semibold tabular-nums">{liveKb.length}</span>
-                <span className="text-[12px] text-fg-3">entries · {learned.length} learned from the community</span>
-              </div>
-              <Sparkline points={growth} />
-              <div className="mt-2 space-y-1.5">
-                {learned.slice(0, 3).map((e) => (
-                  <div key={e.id} className="flex items-center gap-2 text-[12px]">
-                    <Badge tone={e.source === 'Mod' ? 'ok' : e.source === 'Member' ? 'warn' : 'accent'}>{e.source}</Badge>
-                    <span className="truncate text-fg-2">{e.question}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <CardHeader title="Swytchcode" subtitle="Every external action runs through it" icon={<ShieldCheck className="size-4" />} action={<Link to="/guardrails" className="text-[12px] font-medium text-fg-3 hover:text-fg">Guardrails →</Link>} />
-            <div className="grid grid-cols-3 divide-x divide-line">
-              {[
-                ['Calls', s.swyStats.total],
-                ['Dry-runs', s.swyStats.dryRuns],
-                ['Blocked', s.guardrails.length],
-              ].map(([label, n]) => (
-                <div key={label} className="px-4 py-4 text-center">
-                  <div className="text-xl font-semibold tabular-nums">{n}</div>
-                  <div className="mt-0.5 text-[11px] text-fg-3">{label}</div>
+                ['Calls', s.swyStats.total, 'text-fg'],
+                ['Dry-runs', s.swyStats.dryRuns, 'text-fg'],
+                ['Blocked', s.guardrails.length, s.guardrails.length ? 'text-bad' : 'text-fg'],
+              ].map(([label, n, tone]) => (
+                <div key={label} className="px-4 py-3.5">
+                  <div className={clsx('display text-[20px] leading-none font-semibold tabular-nums', tone)}>{n}</div>
+                  <div className="mt-1 text-[11.5px] text-fg-3">{label}</div>
                 </div>
               ))}
             </div>
           </Card>
-
-          {(s.links.telegramJoinUrl || s.links.slackInviteUrl) && (
-            <Card>
-              <CardHeader title="Join the community" subtitle="Scan and ask Pulse anything" icon={<ArrowUpRight className="size-4" />} />
-              <div className="grid grid-cols-2 gap-3 p-4">
-                <Qr url={s.links.telegramJoinUrl} label="Telegram" platform="telegram" />
-                <Qr url={s.links.slackInviteUrl} label="Slack" platform="slack" />
-              </div>
-            </Card>
-          )}
         </div>
       </div>
+
+      {invite && <InviteDialog onClose={() => setInvite(false)} />}
     </div>
   )
 }

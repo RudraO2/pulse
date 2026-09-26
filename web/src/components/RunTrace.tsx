@@ -8,6 +8,7 @@ import {
   Eye,
   Flag,
   Hand,
+  Hourglass,
   LoaderCircle,
   Mail,
   MessageSquareReply,
@@ -21,11 +22,10 @@ import {
   TriangleAlert,
   Users,
   VolumeX,
-  Hourglass,
 } from 'lucide-react'
 import { useState, type ComponentType } from 'react'
 import type { RunStep, RunSummary, StepKind } from '@shared/events'
-import { ms } from '../lib/format'
+import { mdInline, ms } from '../lib/format'
 import { useStore } from '../lib/store'
 import { JsonBlock, ToolChip } from '../ui/primitives'
 
@@ -67,43 +67,55 @@ function StepRow({ step: raw, last, live }: { step: RunStep; last: boolean; live
   const Icon = ICON[step.kind] ?? Sparkles
   const running = step.status === 'start' && live
   const tone =
-    step.status === 'error' ? 'text-bad border-bad/30 bg-bad-soft'
-    : step.status === 'blocked' ? 'text-bad border-bad/30 bg-bad-soft'
-    : step.status === 'waiting' ? 'text-warn border-warn/30 bg-warn-soft'
-    : step.kind === 'think' ? 'text-accent border-accent/25 bg-accent-soft'
-    : 'text-fg-2 border-line bg-surface'
+    step.status === 'error' || step.status === 'blocked' ? 'text-bad bg-bad-soft border-transparent'
+    : step.status === 'waiting' ? 'text-warn bg-warn-soft border-transparent'
+    : step.kind === 'think' ? 'text-accent bg-accent-soft border-transparent'
+    : step.kind === 'search' || step.kind === 'knowledge' ? 'text-teal bg-teal-soft border-transparent'
+    : 'text-fg-3 border-line bg-surface'
   const hasData = step.data !== undefined && step.data !== null && !(typeof step.data === 'object' && Object.keys(step.data as object).length === 0)
+  const tools = step.tools ?? []
+  const expandable = hasData || tools.length > 0
   return (
-    <li className="relative flex gap-3 pb-4 animate-fade-in">
-      {!last && <span className="absolute top-8 bottom-0 left-[13px] w-px bg-line" />}
-      <span className={clsx('relative z-10 grid size-7 shrink-0 place-items-center rounded-lg border', tone)}>
+    <li className="relative grid animate-fade-in grid-cols-[28px_minmax(0,1fr)] gap-3 pb-4">
+      {!last && <span className="absolute top-[30px] bottom-0.5 left-[13.5px] w-px bg-line" />}
+      <span className={clsx('relative z-10 grid size-7 place-items-center rounded-lg border', tone)}>
         {running ? <LoaderCircle className="size-3.5 animate-spin" /> : step.status === 'waiting' ? <Hourglass className="size-3.5" /> : <Icon className="size-3.5" />}
       </span>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <button className="group flex w-full items-start justify-between gap-3 text-left" onClick={() => hasData && setOpen((o) => !o)} disabled={!hasData}>
+      <div className="min-w-0 pt-1">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-[13px] font-medium text-fg">{step.title}</span>
-              {step.status === 'blocked' && <span className="text-[11px] font-medium text-bad">blocked by policy</span>}
-              {step.status === 'waiting' && <span className="text-[11px] font-medium text-warn">waiting</span>}
+              <span className="text-[13.5px] font-medium text-fg">{step.title}</span>
+              {step.status === 'blocked' && <span className="text-[11.5px] font-medium text-bad">blocked by policy</span>}
+              {step.status === 'waiting' && <span className="text-[11.5px] font-medium text-warn">waiting</span>}
             </div>
-            {step.detail && <p className={clsx('mt-0.5 text-[12.5px] leading-relaxed', step.status === 'error' || step.status === 'blocked' ? 'text-bad' : 'text-fg-3')}>{step.detail}</p>}
-            {!!step.tools?.length && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {step.tools.map((t) => (
+            {step.detail && (
+              <p
+                onClick={() => setOpen((o) => !o)}
+                className={clsx('prose-msg mt-0.5 cursor-text text-[12.5px] leading-relaxed', !open && 'line-clamp-3', step.status === 'error' || step.status === 'blocked' ? 'text-bad' : 'text-fg-3')}
+                dangerouslySetInnerHTML={{ __html: mdInline(step.detail) }}
+              />
+            )}
+          </div>
+          {step.durationMs !== undefined && <span className="shrink-0 pt-0.5 font-mono text-[11px] text-fg-4 tabular-nums">{ms(step.durationMs)}</span>}
+        </div>
+        {expandable && (
+          <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] font-medium text-fg-4 transition-colors hover:text-fg-2">
+            <ChevronRight className={clsx('size-3 transition-transform', open && 'rotate-90')} />
+            {tools.length ? `${tools.length} Swytchcode call${tools.length > 1 ? 's' : ''}` : 'Details'}
+            {tools.length > 0 && hasData && ' · details'}
+          </button>
+        )}
+        {open && (
+          <div className="mt-2 space-y-2 animate-fade-in">
+            {tools.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {tools.map((t) => (
                   <ToolChip key={t} id={t} />
                 ))}
               </div>
             )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5 pt-0.5 text-[11px] text-fg-4">
-            {step.durationMs !== undefined && <span className="tabular-nums">{ms(step.durationMs)}</span>}
-            {hasData && <ChevronRight className={clsx('size-3.5 transition-transform group-hover:text-fg-2', open && 'rotate-90')} />}
-          </div>
-        </button>
-        {open && hasData && (
-          <div className="mt-2">
-            <JsonBlock value={step.data} />
+            {hasData && <JsonBlock value={step.data} />}
           </div>
         )}
       </div>
