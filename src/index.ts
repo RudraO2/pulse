@@ -162,7 +162,13 @@ async function main(): Promise<void> {
           link: () => channels.whatsapp!.link(),
           logout: () => channels.whatsapp!.logout(),
           refresh: () => channels.whatsapp!.refreshGroups(),
-          setGroup: async (jid, patch) => channels.whatsapp!.setGroup(jid, patch),
+          setGroup: async (jid, patch) => {
+            try {
+              return channels.whatsapp!.setGroup(jid, patch)
+            } catch (e) {
+              return { error: (e as Error).message }
+            }
+          },
           setDms: async (patch) => channels.whatsapp!.setDms(patch),
           setPaused: async (paused) => channels.whatsapp!.setPaused(paused),
         }

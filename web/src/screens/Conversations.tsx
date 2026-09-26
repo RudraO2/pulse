@@ -64,6 +64,11 @@ function WhatsAppControls({ jid }: { jid: string }) {
   }
   return (
     <div className="ml-auto flex items-center gap-2.5">
+      {g.guide && (
+        <span className="hidden max-w-[260px] truncate text-[12px] text-fg-3 lg:inline" title={`Pulse answers this group from "${g.guide}"`}>
+          📄 {g.guide}
+        </span>
+      )}
       {wa.paused && <Badge tone="warn">Paused</Badge>}
       {g.enabled && <ModePill auto={g.auto} disabled={busy} onChange={(auto) => act({ auto })} />}
       <Switch on={g.enabled} busy={busy} label={`Pulse in ${g.name}`} onChange={(enabled) => act({ enabled })} />

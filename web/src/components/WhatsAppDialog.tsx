@@ -149,7 +149,7 @@ export function WhatsAppDialog({ onClose }: { onClose: () => void }) {
                   key={g.jid}
                   icon={<Users className="size-4" />}
                   name={g.name}
-                  meta={`${g.size} members`}
+                  meta={`${g.size} members${g.guide ? ` · 📄 ${g.guide}` : ''}`}
                   enabled={g.enabled}
                   auto={g.auto}
                   dim={wa.paused}

@@ -19,6 +19,7 @@ import type { InboundMessage, ReplyMode, WhatsAppGroup, WhatsAppState } from '..
 import { kvGetJson, kvSetJson, setMember } from '../store/repo.js'
 import { outboxKey, withOutbox } from '../store/outbox.js'
 import { containsSecret } from '../swy/redact.js'
+import { guideNames, setGuide } from '../kb/group-docs.js'
 import type { ChannelAdapter, SendOptions, SendResult } from './types.js'
 
 // WhatsApp through a linked device (Baileys), patterns from the WhatsApp bot
@@ -120,8 +121,9 @@ export class WhatsAppAdapter implements ChannelAdapter {
   }
 
   private groupList(): WhatsAppGroup[] {
+    const guides = guideNames()
     return [...this.meta.entries()]
-      .map(([jid, g]) => ({ jid, name: g.name, size: g.size, enabled: this.enabled.has(jid), auto: this.auto.has(jid) }))
+      .map(([jid, g]) => ({ jid, name: g.name, size: g.size, enabled: this.enabled.has(jid), auto: this.auto.has(jid), ...(guides[jid] ? { guide: guides[jid] } : {}) }))
       .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name))
   }
 
@@ -133,9 +135,13 @@ export class WhatsAppAdapter implements ChannelAdapter {
     return this.meta.get(jid)?.name
   }
 
-  setGroup(jid: string, patch: { enabled?: boolean; auto?: boolean }): WhatsAppState {
+  setGroup(jid: string, patch: { enabled?: boolean; auto?: boolean; guide?: string | null }): WhatsAppState {
     if (!isGroup(jid)) return this.state()
     const name = this.meta.get(jid)?.name ?? jid
+    if (patch.guide !== undefined) {
+      const g = setGuide(jid, patch.guide ?? undefined)
+      bus.emit({ type: 'log', level: 'info', text: g.name ? `WhatsApp: "${name}" answers from "${g.name}" (${g.sections} sections)` : `WhatsApp: "${name}" has no guide now` })
+    }
     if (patch.enabled !== undefined) {
       if (patch.enabled) this.enabled.add(jid)
       else this.enabled.delete(jid)

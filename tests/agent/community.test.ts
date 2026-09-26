@@ -11,6 +11,10 @@ import { unansweredQuestions, insertMessage } from '../../src/store/repo.js'
 import type { TelegramAdapter } from '../../src/channels/telegram.js'
 import type { WhatsAppAdapter } from '../../src/channels/whatsapp.js'
 import { decide, pendingApprovals } from '../../src/core/approvals.js'
+import { setGuide } from '../../src/kb/group-docs.js'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import type { InboundMessage, KbItem } from '../../src/shared/events.js'
 
 // The Community Agent decides; these tests script the model's decisions and
@@ -79,6 +83,35 @@ afterEach(() => {
 })
 
 describe('community agent', () => {
+  it('answers a group from its guide and names the section', async () => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'guide-')), 'Hack Guide.md')
+    writeFileSync(file, '# Event Schedule\n09:30 Check-in\n\n### Important Deadline\nFinal submission is due at 3:30 PM on Commudle.\n')
+    setGuide('1203@g.us', file)
+    const waSends: string[] = []
+    channels.whatsapp = {
+      platform: 'whatsapp',
+      replyMode: () => 'auto',
+      send: async (_chatId: string, text: string) => {
+        waSends.push(text)
+        return { msgId: 'WA9' }
+      },
+    } as unknown as WhatsAppAdapter
+    const m = msg('when do we have to submit?', { platform: 'whatsapp', chatId: '1203@g.us', msgId: 'Q1' })
+    let prompt = ''
+    const model = new MockLanguageModelV4({
+      doGenerate: async (opts: { prompt: Array<{ role: string; content: unknown }> }) => {
+        prompt = JSON.stringify(opts.prompt)
+        return call('reply', { text: 'By **3:30 PM** today, on Commudle.', guide_section: 'Important Deadline' })
+      },
+    } as never)
+    const res = await runCommunityAgent({ run: startRun('community', m.text), model, chatKey: 'whatsapp:1203@g.us', batch: [m], history: [], signals: [], waiting: [] })
+    expect(res.outcome).toBe('answered')
+    expect(prompt).toContain('GUIDE \\"Hack Guide\\"')
+    expect(prompt).toContain('Final submission is due at 3:30 PM')
+    expect(waSends[0]).toContain('📎 _Hack Guide › Event Schedule › Important Deadline_')
+    channels.whatsapp = undefined
+  })
+
   it('in a WhatsApp group on Approve, drafts the reply for the organizer instead of sending it', async () => {
     const waSends: Array<{ chatId: string; text: string; replyToId?: string; byOrganizer?: boolean }> = []
     let mode: 'auto' | 'approve' = 'approve'

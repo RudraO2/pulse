@@ -8,6 +8,9 @@ const STOP = new Set(
 /** Tiny suffix stemmer so "parking" matches "park" and "deadlines" matches "deadline". */
 export function stem(t: string): string {
   if (t.length <= 4 || /[0-9_.]/.test(t)) return t
+  // "submission" ↔ "submit", "permission" ↔ "permit"
+  if (t.endsWith('ission') && t.length > 7) return t.slice(0, -6) + 'it'
+  if (t.endsWith('issions') && t.length > 8) return t.slice(0, -7) + 'it'
   if (t.endsWith('ies') && t.length > 5) return t.slice(0, -3) + 'y'
   if (t.endsWith('ing') && t.length > 5) return t.slice(0, -3)
   if (t.endsWith('ed') && t.length > 5) return t.slice(0, -2)

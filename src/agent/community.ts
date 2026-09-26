@@ -9,6 +9,7 @@ import type { Run } from '../core/runs.js'
 import { createPending, openAttention, savePending, updateAttention } from '../core/state-docs.js'
 import { writeHistory, type Message } from '../conversation/memory.js'
 import { getEntry, markUsed, searchKnowledge, type KbHit } from '../kb/knowledge.js'
+import { guideFor, guideOutline, searchGuide, type GuideHit } from '../kb/group-docs.js'
 import type { InboundMessage, MemberCase, RunOutcome } from '../shared/events.js'
 import { markAnswered } from '../store/repo.js'
 import { redact } from '../swy/redact.js'
@@ -70,7 +71,15 @@ function knowledgeBlock(hits: KbHit[]): string {
     .join('\n')}`
 }
 
-export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hits: KbHit[]): string {
+function guideBlock(name: string, hits: GuideHit[], outline: string[]): string {
+  const toc = outline.length ? `\nAll sections: ${outline.join(' | ')}` : ''
+  if (!hits.length) return `GUIDE "${name}": (no section matches these words; try search_knowledge with other words)${toc}`
+  return `GUIDE "${name}" (official for this chat, best matching sections):\n${hits
+    .map((h) => `§ ${h.section.title}\n${h.section.text.slice(0, 1400)}`)
+    .join('\n\n')}${toc}`
+}
+
+export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hits: KbHit[], guide?: { name: string; hits: GuideHit[]; outline: string[] }): string {
   const hist = input.history
     .slice(-30, -input.batch.length || undefined)
     .map((m) => `${m.ts ? `${fmtTime(m.ts)} ` : ''}${m.sender}: ${redact(m.text).slice(0, 300)}`)
@@ -94,6 +103,7 @@ export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hi
     return `[${m.msgId}] ${m.userName}${tags.length ? ` {${tags.join('; ')}}` : ''}: ${redact(m.text).slice(0, 800)}`
   })
   return [
+    guide ? guideBlock(guide.name, guide.hits, guide.outline) : '',
     knowledgeBlock(hits),
     input.waiting.length ? `ALREADY WAITING ON ORGANIZERS (don't ask again): ${input.waiting.map((w) => `"${w.slice(0, 80)}"`).join(', ')}` : '',
     hist.length ? `RECENT CONVERSATION (oldest first):\n${hist.join('\n')}` : 'RECENT CONVERSATION: (none)',
@@ -114,12 +124,15 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
 
   const query = batch.map((m) => m.text).join(' ')
   const hits = searchKnowledge(query, 5)
+  // A guide attached to this chat (e.g. the participant guide in the event group) is its first source.
+  const guideInfo = guideFor(chatId)
+  const guide = guideInfo ? { name: guideInfo.name, hits: searchGuide(chatId, query, 3), outline: guideOutline(chatId) } : undefined
   run.steps.record(
     'context',
     'Read the conversation',
     'ok',
-    `${batch.length} new message(s), ${input.history.length} in memory · ${hits.length} knowledge match${hits.length === 1 ? '' : 'es'}`,
-    { knowledge: hits.map((h) => ({ q: h.entry.question, score: h.score })), signals: input.signals },
+    `${batch.length} new message(s), ${input.history.length} in memory · ${hits.length} knowledge match${hits.length === 1 ? '' : 'es'}${guide ? ` · ${guide.hits.length} guide section${guide.hits.length === 1 ? '' : 's'}` : ''}`,
+    { knowledge: hits.map((h) => ({ q: h.entry.question, score: h.score })), guide: guide?.hits.map((h) => ({ section: h.section.title, score: h.score })), signals: input.signals },
   )
 
   /** set by the one terminal action of this batch (reply / welcome / ask_mods / stay_silent) */
@@ -154,6 +167,13 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
     return res
   }
 
+  const guideFooter = (section?: string): string => {
+    if (!guide || !section) return ''
+    const want = section.toLowerCase().replace(/^§\s*/, '')
+    const match = searchGuide(chatId, section, 8).find((h) => h.section.title.toLowerCase() === want || h.section.title.toLowerCase().endsWith(want) || want.endsWith(h.section.title.toLowerCase()))
+    return match ? `\n\n📎 _${guide.name} › ${match.section.title}_` : ''
+  }
+
   const sourcesFooter = (ids: string[]): string => {
     const entries = ids.map((id) => getEntry(id)).filter((e): e is NonNullable<typeof e> => !!e)
     if (!entries.length) return ''
@@ -168,10 +188,16 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
       execute: async ({ query }) => {
         const step = run.steps.begin('search', 'Search the knowledge base', `“${query}”`)
         const found = searchKnowledge(query, 5)
-        step.ok(found.length ? `${found.length} match(es): ${found[0]!.entry.question}` : 'nothing relevant', { results: found.map((h) => ({ id: h.entry.id, q: h.entry.question, score: h.score })) })
-        return found.length
-          ? found.map((h) => ({ kb_id: h.entry.id, question: h.entry.question, answer: h.entry.answer.slice(0, 700), relevance: h.score }))
-          : 'No matching entries. If this is a community-specific question, use ask_mods.'
+        const sections = guide ? searchGuide(chatId, query, 3) : []
+        step.ok(found.length || sections.length ? `${found.length} match(es)${found[0] ? `: ${found[0].entry.question}` : ''}${guide ? ` · ${sections.length} guide section(s)` : ''}` : 'nothing relevant', {
+          results: found.map((h) => ({ id: h.entry.id, q: h.entry.question, score: h.score })),
+          guide: sections.map((h) => h.section.title),
+        })
+        if (!found.length && !sections.length) return 'No matching entries. If this is a community-specific question, use ask_mods.'
+        return {
+          ...(sections.length ? { guide: sections.map((h) => ({ section: h.section.title, text: h.section.text.slice(0, 1400) })) } : {}),
+          knowledge: found.map((h) => ({ kb_id: h.entry.id, question: h.entry.question, answer: h.entry.answer.slice(0, 700), relevance: h.score })),
+        }
       },
     }),
 
@@ -180,12 +206,14 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
       inputSchema: z.object({
         text: z.string().describe('the message, markdown allowed, 1–4 sentences'),
         kb_ids: z.array(z.string()).default([]).describe('ids of KNOWLEDGE entries the answer is based on'),
+        ...(guide ? { guide_section: z.string().optional().describe('title of the GUIDE section the answer is based on, if any') } : {}),
       }),
-      execute: async ({ text, kb_ids }) => {
+      execute: async ({ text, kb_ids, ...rest }) => {
+        const guideSection = (rest as { guide_section?: string }).guide_section
         if (outcome) return 'Already handled this batch.'
         const valid = kb_ids.filter((id) => !!getEntry(id))
         const step = run.steps.begin('reply', 'Reply in the chat', valid.length ? `answered from ${valid.length} knowledge entr${valid.length === 1 ? 'y' : 'ies'}` : 'answered')
-        const full = text.trim() + sourcesFooter(valid)
+        const full = text.trim() + (valid.length ? sourcesFooter(valid) : guideFooter(guideSection))
         const res = await sendToChat(full, step)
         if (!res.ok) {
           if (res.blocked) step.blocked(`Swytchcode policy ${res.blocked.policyId ?? res.blocked.kind} blocked the post: ${res.blocked.message}`)
@@ -239,6 +267,12 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
         if (outcome) return 'Already handled this batch.'
         // Don't bother organizers with something the knowledge base already answers:
         // give the model the entry once and let it decide again.
+        const inGuide = guide ? searchGuide(chatId, question, 1)[0] : undefined
+        if (inGuide && inGuide.score >= 3 && !kbChecked) {
+          kbChecked = true
+          run.steps.record('search', 'Double-check the guide', 'ok', `found “${inGuide.section.title}” before asking organizers`)
+          return `Before asking organizers: the GUIDE "${guide!.name}" has a section "${inGuide.section.title}":\n${inGuide.section.text.slice(0, 1400)}\nIf this answers the member, call reply with guide_section "${inGuide.section.title}". Only call ask_mods again if it truly does not answer their question.`
+        }
         const known = searchKnowledge(question, 1)[0]
         if (known && known.score >= 3 && !kbChecked) {
           kbChecked = true
@@ -365,8 +399,8 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
   try {
     await generateText({
       model: input.model,
-      instructions: communityInstructions({ platform: platformLabel(platform), chatTitle: target.chatTitle, now }),
-      prompt: buildContext(input, hits),
+      instructions: communityInstructions({ platform: platformLabel(platform), chatTitle: target.chatTitle, now, guide: guide?.name }),
+      prompt: buildContext(input, hits, guide),
       tools,
       toolChoice: 'required',
       maxRetries: 0,

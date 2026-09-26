@@ -43,7 +43,7 @@ export interface AppHandlers {
     link: () => Promise<unknown>
     logout: () => Promise<unknown>
     refresh: () => Promise<unknown>
-    setGroup: (jid: string, patch: { enabled?: boolean; auto?: boolean }) => Promise<unknown>
+    setGroup: (jid: string, patch: { enabled?: boolean; auto?: boolean; guide?: string | null }) => Promise<unknown>
     setDms: (patch: { enabled?: boolean; auto?: boolean }) => Promise<unknown>
     setPaused: (paused: boolean) => Promise<unknown>
   }
@@ -236,7 +236,10 @@ export function createApp(opts: AppOptions): Hono {
   app.post('/api/whatsapp/groups', requireAdmin, async c => {
     const body = await readJson(c)
     if (typeof body.jid !== 'string' || !body.jid.endsWith('@g.us')) return c.json({ error: 'group jid required' }, 400)
-    return call(opts.whatsapp && (() => opts.whatsapp!.setGroup(String(body.jid), switches(body))), c)
+    // guide: a file path on this laptop, so only settable from here
+    const guide = typeof body.guide === 'string' || body.guide === null ? (isLocal(c) ? { guide: body.guide as string | null } : undefined) : {}
+    if (!guide) return c.json({ error: 'guides can only be attached from the Pulse laptop' }, 403)
+    return call(opts.whatsapp && (() => opts.whatsapp!.setGroup(String(body.jid), { ...switches(body), ...guide })), c)
   })
   app.post('/api/whatsapp/dms', requireAdmin, async c => {
     const body = await readJson(c)

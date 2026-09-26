@@ -298,6 +298,8 @@ export interface WhatsAppGroup {
   enabled: boolean
   /** auto: Pulse replies on its own; otherwise each reply waits for the organizer's approval */
   auto: boolean
+  /** name of the guide Pulse answers this group from (e.g. the participant guide) */
+  guide?: string
 }
 
 export interface WhatsAppState {
