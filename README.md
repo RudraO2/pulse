@@ -34,7 +34,7 @@
   </tr>
 </table>
 
-Integrations: **Telegram · Slack · Notion · Resend**, all via Swytchcode. (X is the fifth Track 3 integration. We left it out because its API is paid-only since Feb 2026, and this project runs on free tiers.)
+Integrations: **Telegram · Slack · Notion · Resend**, all via Swytchcode, plus **WhatsApp groups** through a linked device. (X is the fifth Track 3 integration. We left it out because its API is paid-only since Feb 2026, and this project runs on free tiers.)
 
 ---
 
@@ -50,7 +50,9 @@ Every community (a college club, an open-source project, a hackathon, a product'
 
 | | |
 |---|---|
-| **Answers instantly** | Answers member questions in Telegram/Slack from the community's **Notion** knowledge base, with a link to the source page. |
+| **Answers instantly** | Answers member questions in Telegram, Slack and WhatsApp from the community's **Notion** knowledge base, with a link to the source page. |
+| **Lives in WhatsApp groups** | Link a number by scanning a QR (like WhatsApp Web), then switch Pulse on per group. Each group is **Auto** (Pulse replies on its own) or **Approve** (every reply waits for the organizer: Inbox, phone push, or ✅ in #mods), with one master **Replying / Paused** switch. Personal chats are never read: DMs only from members of groups Pulse is on in. |
+| **Answers from your guide, knows the time** | Attach a document to a group (e.g. the event's participant guide) and Pulse answers from it, naming the section. It reads the guide's schedule table and the clock on every message, so *"did I miss lunch?"* gets *"Lunch was 1:00–1:40 PM, it's over; Build Session II runs until 3:30"* and *"how long to submit?"* gets the minutes left. |
 | **Learns from organizers** | If a question isn't in Notion, Pulse tells the member it's checking and asks the organizers in a private Slack **#mods** thread. An organizer replies once. Pulse relays the answer, **writes it to Notion as a clean FAQ entry**, answers anyone else who was waiting, and answers instantly next time. |
 | **Turns chat into knowledge** | When a member correctly answers another member, Pulse proposes saving it. An organizer reacts ✅ in Slack; it's saved to Notion and the helper is credited and thanked. |
 | **Follows every problem until it's solved** | A fast mood model reads every message (−1 … +1, emotion, "is this a problem?", "is it solved?"; keywords are the fallback). A member who is stuck or upset gets a **case**: Pulse tracks their mood over time and brings in a human when the *trend* says so (very upset, getting worse, still stuck after Pulse's answer, asked 3 times, upset and waiting, or asked for a person), each with a plain-language reason. When they say *"works now, thanks"* the case closes itself and #mods is told in the same thread. |
@@ -71,6 +73,7 @@ flowchart LR
   subgraph Community
     TG[Telegram group]
     SL[Slack #general]
+    WA[WhatsApp groups]
   end
   subgraph Organizers
     MODS[Slack #mods]
@@ -81,6 +84,9 @@ flowchart LR
 
   TG -- getUpdates long-poll --> ING
   SL -- conversations.history --> ING
+  WA -- linked device · Baileys --> ING
+  ACT -- per-group Auto / Approve,<br/>secret check · rate window --> WA
+  GUIDE[Group guide + schedule<br/>sections · BM25 · right-now timeline] --> CA
   ING[Ingest + batcher<br/>per-chat windows, backlog drain,<br/>memory, SQLite] --> MOOD
   MOOD[Mood reader<br/>small model per message,<br/>keywords as fallback] --> CASES[Member cases<br/>mood trend → escalate<br/>“works now” → close]
   MOOD --> CA
@@ -159,6 +165,8 @@ It also uses these Swytchcode features:
 - **Discover and info at runtime.** The Console's `find_capability` / `inspect_capability` let the agent use any allow-listed method with no new code.
 - **Execution policy.** Retries only on 429 for posts (never double-post) and idempotency keys for email.
 
+**WhatsApp is the one channel outside Swytchcode.** Swytchcode has no WhatsApp *group* API (its WhatsApp method is Telnyx's business-number send, which can't join groups), so Pulse talks to WhatsApp through a linked device (Baileys). The same protections are applied in the app instead: a secret-token check before every send, a per-chat rate window, members-only DMs, and per-group approval.
+
 Why Pulse runs its own approval loop: Swytchcode's `REQUIRES_APPROVAL` needs the Business plan. Pulse builds the equivalent through Swytchcode itself: dry-run, then a Slack ✅ or dashboard click, then a single execution.
 
 ---
@@ -169,7 +177,7 @@ Why Pulse runs its own approval loop: Swytchcode's `REQUIRES_APPROVAL` needs the
 |---|---|
 | **Overview** | Active members, questions answered, median response time, answers learned, and the live activity feed (click any decision for its full trace) |
 | **Console** | Type a request and watch the plan, each tool, each Swytchcode call, the dry-run previews and approvals, then the result |
-| **Conversations** | Telegram and Slack as Pulse sees them, each message annotated with Pulse's decision (answered, asked organizers, stayed silent, flagged) |
+| **Conversations** | Telegram, Slack and the WhatsApp groups Pulse is on in, each message annotated with Pulse's decision (answered, asked organizers, stayed silent, flagged). WhatsApp groups show their Auto / Approve switch, and replies waiting for approval appear inline with Send / Discard |
 | **Knowledge** | The Notion knowledge base: entries, where each was learned, how often it's used, gaps waiting on organizers |
 | **Inbox** | Approvals with previews, questions waiting on organizers, members needing attention |
 | **Guardrails** | Policies with block counts, live blocked attempts, the 18-check self-test, the allow-list, and the audit log |
@@ -185,6 +193,8 @@ Why Pulse runs its own approval loop: Swytchcode's `REQUIRES_APPROVAL` needs the
     <td><img src="docs/screenshots/phone-people.png" width="260" alt="Phone app: people Pulse is following" /><br/><sub><b>People</b> (phone): who's stuck, who's sorted</sub></td>
   </tr>
 </table>
+
+**WhatsApp.** The WhatsApp icon in the top bar opens the link QR, the master Replying / Paused switch and every group with its on/off and Auto / Approve switches.
 
 **On your phone (`/m`).** Tap the phone icon in the dashboard's top bar and scan the QR. It opens the app over a Cloudflare tunnel with your access token, so you can add it to the home screen and turn on notifications. Screens: **Needs you** (approve, answer, reply, resolve), **People** (everyone Pulse is following, with a mood line and the full story), **Ask** (the Console).
 
@@ -209,11 +219,12 @@ npm run build && npm start    # dashboard on http://localhost:3210
 - **Notion:** create an internal integration, add it to your database (••• → Connections), and put the token and database id in `.env`.
 - **Resend:** add an API key and your own address as `DIGEST_TO`.
 - **LLMs:** a Groq key (fast community replies), plus Anthropic (the Console runs on Claude Haiku 4.5 first).
+- **WhatsApp (optional):** nothing to set up in advance. Open the WhatsApp icon in the dashboard, scan the QR from WhatsApp → Linked devices, and switch Pulse on in a group. The session is stored in `data/whatsapp-auth` and reconnects on restart. To answer a group from a document, attach it: `POST /api/whatsapp/groups {"jid": "<group id>", "guide": "C:/path/to/guide.md"}` from the Pulse laptop. Baileys is an unofficial client, so use a number you're comfortable linking.
 - **Phone app (optional):** install `cloudflared` and set `TUNNEL=cloudflared`. Pulse opens a free HTTPS tunnel, generates an access token (requests from the laptop itself stay trusted), and shows the pairing QR under the phone icon. `npx tsx scripts/make-icons.ts` regenerates the app icons.
 
 Development: `npm run dev` (server with reload) and `npm run dev:web` (Vite on :5173, proxies `/api`).
 
-Tests: `npm test`. There are 114 tests covering the mood reader, the case rules and the organizer notifier, plus the Swytchcode wrapper against the real binary, the policies compiler (golden files), the idempotent outbox, the batcher, the approval state machine and community-agent tool routing (scripted model).
+Tests: `npm test`. There are 137 tests covering the WhatsApp switches and approval path, guide search and the schedule timeline, the mood reader, the case rules and the organizer notifier, plus the Swytchcode wrapper against the real binary, the policies compiler (golden files), the idempotent outbox, the batcher, the approval state machine and community-agent tool routing (scripted model).
 
 ---
 
@@ -230,8 +241,9 @@ Tests: `npm test`. There are 114 tests covering the mood reader, the case rules 
 Project layout:
 ```
 src/agent/      community, learn, console agents · prompts · model chains
+src/channels/   Telegram and Slack (via Swytchcode), WhatsApp (linked device)
 src/core/       channels (guarded posting), approvals, mods, runs, stats
-src/kb/         Notion knowledge base + sync
+src/kb/         Notion knowledge base + sync · per-group guides · schedule timeline
 src/jobs/       care sweep, digest
 src/demo/       scripted personas + scenario engine
 src/swy/        Swytchcode wrapper, policies compiler, self-test
