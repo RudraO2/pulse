@@ -214,7 +214,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
         void QRCode.toDataURL(u.qr, { margin: 1, width: 300 })
           .then((qr) => this.emit({ status: 'qr', qr }))
           .catch(() => {})
-        this.status('degraded', 'waiting for the QR to be scanned')
+        this.status('disabled', 'waiting for the QR to be scanned')
       }
       if (u.connection === 'open') {
         this.reconnects = 0

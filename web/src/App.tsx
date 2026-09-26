@@ -1,6 +1,7 @@
 import clsx from 'clsx'
 import { ChevronDown, Monitor, Moon, Pause, Play, Smartphone, Sparkles, Sun } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { HashRouter, NavLink, Route, Routes } from 'react-router'
 import type { ServiceName } from '@shared/events'
 import { CommandPalette } from './components/CommandPalette'
@@ -160,8 +161,9 @@ function TopBar() {
         </div>
       </div>
       <ScenarioBanner />
-      {phone && <PhoneDialog onClose={() => setPhone(false)} />}
-      {whatsapp && <WhatsAppDialog onClose={() => setWhatsapp(false)} />}
+      {/* portals: the header's backdrop blur would otherwise trap fixed dialogs inside it */}
+      {phone && createPortal(<PhoneDialog onClose={() => setPhone(false)} />, document.body)}
+      {whatsapp && createPortal(<WhatsAppDialog onClose={() => setWhatsapp(false)} />, document.body)}
     </header>
   )
 }
