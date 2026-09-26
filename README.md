@@ -1,8 +1,39 @@
-# Pulse: the AI community manager that learns
+<p align="center">
+  <img src="docs/assets/pulse-logo.svg" width="112" alt="Pulse logo" />
+</p>
 
-> Answers your community from Notion in seconds, asks your organizers when it doesn't know, and **remembers their answer forever**. It looks after every member and runs your announcements from one plain-English console. Every action it takes goes through **Swytchcode**.
+<h1 align="center">Pulse</h1>
 
-Built for **Build with Swytchcode (Gurgaon), Track 3: AI Community Agent**.
+<p align="center"><b>The AI community manager that learns.</b></p>
+
+<p align="center">
+  Answers your community from Notion in seconds, asks your organizers when it doesn't know and remembers their answer forever.<br/>
+  It follows every upset member until they're sorted, and reaches you on your phone when a human is needed.<br/>
+  Every action goes through <b>Swytchcode</b>.
+</p>
+
+<p align="center">
+  <img alt="Swytchcode" src="https://img.shields.io/badge/Swytchcode-34%20methods%20%C2%B7%209%20policies-2d5bff" />
+  <img alt="Integrations" src="https://img.shields.io/badge/Telegram%20%C2%B7%20Slack%20%C2%B7%20Notion%20%C2%B7%20Resend-via%20Swytchcode-12151b" />
+  <img alt="Agent framework" src="https://img.shields.io/badge/Vercel%20AI%20SDK-v7%20tool%20loops-000000" />
+  <img alt="Tests" src="https://img.shields.io/badge/tests-115%20passing-17804a" />
+  <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A522.13-417e38" />
+</p>
+
+<p align="center">Build with Swytchcode · Gurgaon 2026 · <b>Track 3: AI Community Agent</b></p>
+
+<p align="center">
+  <img src="docs/screenshots/overview.png" width="100%" alt="Pulse dashboard: today's numbers, the learning loop, activity, what needs you and the people Pulse is following" />
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="docs/screenshots/phone-needs-you.png" width="240" alt="Phone app: Needs you" /><br/><sub><b>Needs you</b>: Ask Pulse, approve, resolve</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-person.png" width="240" alt="Phone app: a member's mood timeline" /><br/><sub><b>A member's story</b>: angry → human → sorted</sub></td>
+    <td align="center"><img src="docs/screenshots/phone-ask.png" width="240" alt="Phone app: Ask Pulse" /><br/><sub><b>Ask Pulse</b>: the Console, in your pocket</sub></td>
+  </tr>
+</table>
+
 Integrations: **Telegram · Slack · Notion · Resend**, all via Swytchcode. (X is the fifth Track 3 integration. We left it out because its API is paid-only since Feb 2026, and this project runs on free tiers.)
 
 ---
@@ -22,7 +53,9 @@ Every community (a college club, an open-source project, a hackathon, a product'
 | **Answers instantly** | Answers member questions in Telegram/Slack from the community's **Notion** knowledge base, with a link to the source page. |
 | **Learns from organizers** | If a question isn't in Notion, Pulse tells the member it's checking and asks the organizers in a private Slack **#mods** thread. An organizer replies once. Pulse relays the answer, **writes it to Notion as a clean FAQ entry**, answers anyone else who was waiting, and answers instantly next time. |
 | **Turns chat into knowledge** | When a member correctly answers another member, Pulse proposes saving it. An organizer reacts ✅ in Slack; it's saved to Notion and the helper is credited and thanked. |
-| **Looks after people** | Welcomes newcomers, detects frustration and asks for a human, and runs a **care sweep** that revives questions nobody answered. |
+| **Follows every problem until it's solved** | A fast mood model reads every message (−1 … +1, emotion, "is this a problem?", "is it solved?"; keywords are the fallback). A member who is stuck or upset gets a **case**: Pulse tracks their mood over time and brings in a human when the *trend* says so (very upset, getting worse, still stuck after Pulse's answer, asked 3 times, upset and waiting, or asked for a person), each with a plain-language reason. When they say *"works now, thanks"* the case closes itself and #mods is told in the same thread. |
+| **Looks after people** | Welcomes newcomers and runs a **care sweep** that revives questions nobody answered. |
+| **Reaches the organizer anywhere** | Everything that needs a human is **emailed** via Swytchcode → Resend (upset members within seconds, the rest bundled every few minutes) and **pushed to the organizer's phone**. The **Pulse phone app** (a PWA at `/m`) has Approve / Reject and Resolve right on the notification, lets you answer a question Pulse didn't know (it's relayed and saved to Notion, same learning loop as Slack), and handle an upset member: tell Pulse what to do in your own words (*"lunch is at 1:30 now, let him know"*); it drafts the reply in their thread (plus an FAQ fix or announcement only if you ask), you approve, it's sent through Swytchcode, taken off your list, and Pulse keeps watching until they're sorted. |
 | **Operator Console** | Organizers type requests like *"Lunch moved to 1:30. Tell everyone, pin it, update the FAQ."* Pulse researches, plans and prepares every action as a **Swytchcode dry-run preview**, then executes after approval (dashboard click or ✅ in Slack). |
 | **Digest** | The agent writes a digest (top questions, what it learned, knowledge gaps, top helpers, who needs attention), emails it via **Resend**, and archives it in Notion. |
 | **Guardrails that can't be prompted away** | Swytchcode policies block secret leaks, @channel mass-pings, shortened or raw-IP links, emails to strangers, DMs to non-members and posting floods, **before the request leaves the machine**, whatever the model decides. |
@@ -43,11 +76,20 @@ flowchart LR
     MODS[Slack #mods]
     DASH[Pulse dashboard<br/>Console · Inbox · Guardrails]
     MAIL[Organizer inbox]
+    PHONE[Pulse phone app · PWA<br/>push · approve · reply]
   end
 
   TG -- getUpdates long-poll --> ING
   SL -- conversations.history --> ING
-  ING[Ingest + batcher<br/>per-chat windows, backlog drain,<br/>memory, SQLite] --> CA
+  ING[Ingest + batcher<br/>per-chat windows, backlog drain,<br/>memory, SQLite] --> MOOD
+  MOOD[Mood reader<br/>small model per message,<br/>keywords as fallback] --> CASES[Member cases<br/>mood trend → escalate<br/>“works now” → close]
+  MOOD --> CA
+  CASES --> NOTIFY[Needs-you notifier<br/>push now · email urgent now, rest bundled]
+  APR --> NOTIFY
+  NOTIFY -- web push, signed quick actions --> PHONE
+  NOTIFY --> SWY
+  PHONE -- approve · “Ask Pulse” about a member --> CON
+  PHONE -.-> APR
 
   CA[Community Agent<br/>Groq → Gemini → Claude Haiku] -->|tools| ACT
   LA[Learning Agent] -->|tools| ACT
@@ -133,6 +175,19 @@ Why Pulse runs its own approval loop: Swytchcode's `REQUIRES_APPROVAL` needs the
 | **Guardrails** | Policies with block counts, live blocked attempts, the 18-check self-test, the allow-list, and the audit log |
 | **Demo** | Scripted scenarios (fake members, real agent) with play, pause, speed and reset |
 
+<table>
+  <tr>
+    <td><img src="docs/screenshots/inbox.png" alt="Inbox: approvals with dry-run previews, members with their mood line" /><br/><sub><b>Inbox</b>: approvals with Swytchcode dry-run previews, members with their mood line</sub></td>
+    <td><img src="docs/screenshots/console.png" alt="Console: a plain-English request, the agent's steps and the approvals it prepared" /><br/><sub><b>Console</b>: plain-English request → steps → approvals</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/guardrails.png" alt="Guardrails: Swytchcode policies, blocked attempts and the self-test" /><br/><sub><b>Guardrails</b>: Swytchcode policies, blocked attempts, self-test, audit</sub></td>
+    <td><img src="docs/screenshots/phone-people.png" width="260" alt="Phone app: people Pulse is following" /><br/><sub><b>People</b> (phone): who's stuck, who's sorted</sub></td>
+  </tr>
+</table>
+
+**On your phone (`/m`).** Tap the phone icon in the dashboard's top bar and scan the QR. It opens the app over a Cloudflare tunnel with your access token, so you can add it to the home screen and turn on notifications. Screens: **Needs you** (approve, answer, reply, resolve), **People** (everyone Pulse is following, with a mood line and the full story), **Ask** (the Console).
+
 ---
 
 ## Setup
@@ -154,10 +209,11 @@ npm run build && npm start    # dashboard on http://localhost:3210
 - **Notion:** create an internal integration, add it to your database (••• → Connections), and put the token and database id in `.env`.
 - **Resend:** add an API key and your own address as `DIGEST_TO`.
 - **LLMs:** a Groq key (fast community replies), plus Anthropic (the Console runs on Claude Haiku 4.5 first).
+- **Phone app (optional):** install `cloudflared` and set `TUNNEL=cloudflared`. Pulse opens a free HTTPS tunnel, generates an access token (requests from the laptop itself stay trusted), and shows the pairing QR under the phone icon. `npx tsx scripts/make-icons.ts` regenerates the app icons.
 
 Development: `npm run dev` (server with reload) and `npm run dev:web` (Vite on :5173, proxies `/api`).
 
-Tests: `npm test`. There are 99 tests covering the Swytchcode wrapper against the real binary, the policies compiler (golden files), the idempotent outbox, the batcher, the approval state machine and community-agent tool routing (scripted model).
+Tests: `npm test`. There are 114 tests covering the mood reader, the case rules and the organizer notifier, plus the Swytchcode wrapper against the real binary, the policies compiler (golden files), the idempotent outbox, the batcher, the approval state machine and community-agent tool routing (scripted model).
 
 ---
 
@@ -167,6 +223,8 @@ Tests: `npm test`. There are 99 tests covering the Swytchcode wrapper against th
 - **Knowledge as context, not RAG infrastructure.** The KB is small, so the best BM25 matches go straight into the prompt. Notion stays the source of truth, and organizers can edit it directly.
 - **Never double-post.** Every outbound message goes through an outbox keyed by chat, reply target and text (or by approval id + action index). A crash mid-send is quarantined, never retried.
 - **Honest numbers.** Scripted demo traffic is flagged end to end and counted separately from real members.
+- **Escalation by trend, not by one angry word.** The mood model only scores; the escalation rules are code (`src/core/cases.ts`), so every "needs a human" has a reason you can read and test.
+- **Phone actions without a password on the phone's notifications.** Each push carries an HMAC signature valid for that one item only, so the service worker can Approve/Resolve without storing the access token. Email buttons only open the app; email scanners that prefetch links can't approve anything.
 - **Stored state.** SQLite (`node:sqlite`) for messages, runs, approvals and pending questions; Notion for knowledge.
 
 Project layout:

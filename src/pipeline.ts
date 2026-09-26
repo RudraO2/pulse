@@ -1,17 +1,19 @@
 import { bus } from './bus.js'
 import { runCommunityAgent, type MemberSignal } from './agent/community.js'
 import { handleModReply } from './agent/learn.js'
-import { communityModel, consoleModel } from './agent/models.js'
-import { directedAt, heuristicFrustration, isNoise, isQuestionLike, wantsHuman } from './agent/triage.js'
+import { communityModel, consoleModel, lightModel } from './agent/models.js'
+import { readMood, type MoodReading } from './agent/mood.js'
+import { directedAt, isNoise, isQuestionLike } from './agent/triage.js'
+import { activeCases, caseOf, escalate, fmtMood, getCase, moodTrend, noteReply, observe, shouldEscalate } from './core/cases.js'
+import type { Run } from './core/runs.js'
 import { createBatcher, type Batcher } from './conversation/batcher.js'
 import { readHistory } from './conversation/memory.js'
 import { channels, post } from './core/channels.js'
 import { modsChannel } from './core/mods.js'
 import { startRun } from './core/runs.js'
-import { openAttention, pendingByThread, waitingQuestions } from './core/state-docs.js'
-import { modsAvailable, platformLabel, postModsCard, quote } from './core/mods.js'
+import { pendingByThread, waitingQuestions } from './core/state-docs.js'
 import { markUsed, searchKnowledge } from './kb/knowledge.js'
-import type { InboundMessage } from './shared/events.js'
+import type { InboundMessage, MemberCase, RunOutcome } from './shared/events.js'
 import { getDb } from './store/db.js'
 import { insertMessage, insertQuestion, markAnswered, searchQuestions } from './store/repo.js'
 
@@ -36,8 +38,10 @@ function isNewMember(m: InboundMessage): boolean {
   return Number(r.n) <= 1
 }
 
-function signalsFor(batch: InboundMessage[], history: Array<{ sender: string; text: string }>): MemberSignal[] {
+function signalsFor(batch: InboundMessage[], history: Array<{ sender: string; text: string }>, readings: MoodReading[]): MemberSignal[] {
   return batch.map((m) => {
+    const r = readings.find((x) => x.msgId === m.msgId)
+    const c = caseOf(m.platform, m.userId, !!m.simulated)
     const aimed = directedAt(m.text)
     // An @reply to someone who recently asked a question, that isn't itself a question, is probably an answer.
     const asker = aimed
@@ -48,7 +52,9 @@ function signalsFor(batch: InboundMessage[], history: Array<{ sender: string; te
     const top = past[0]
     return {
       msgId: m.msgId,
-      frustration: Math.max(heuristicFrustration(m.text, asks), wantsHuman(m.text) ? 0.5 : 0),
+      frustration: r ? Math.max(0, -r.score) : 0,
+      mood: r ? { score: r.score, emotion: r.emotion, wantsHuman: r.wantsHuman } : undefined,
+      case: c ? { topic: c.topic, trend: moodTrend(c), status: c.status, pulseReplies: c.pulseReplies } : undefined,
       asksToday: asks,
       isNew: isNewMember(m),
       repeatOf: top ? { text: top.text, userName: top.userName, answered: false } : undefined,
@@ -94,42 +100,98 @@ async function fallbackAnswer(batch: InboundMessage[], runId: string): Promise<'
   return 'silent'
 }
 
+/** Feed mood readings into member cases; one visible step says what Pulse noticed. */
+function trackMood(run: Run, batch: InboundMessage[], readings: MoodReading[]): MemberCase[] {
+  const touched = new Map<string, MemberCase>()
+  const notes: string[] = []
+  for (const m of batch) {
+    const r = readings.find((x) => x.msgId === m.msgId)
+    if (!r) continue
+    const res = observe(m, r)
+    if (res.case) touched.set(res.case.id, res.case)
+    const who = m.userName.split(' ')[0]
+    const tag = res.opened ? `, case opened: ${res.case!.topic}` : res.resolved ? ', sorted: case closed' : res.case ? `, case mood ${fmtMood(res.case.mood)}` : ''
+    if (res.case || r.score <= -0.2 || r.wantsHuman) notes.push(`${who} ${fmtMood(r.score)} ${r.emotion}${tag}`)
+  }
+  if (notes.length) {
+    const via = readings.some((r) => r.via === 'llm') ? 'mood model' : 'keywords'
+    run.steps.record('mood', 'Read the mood', 'ok', notes.join(' · '), { readings, via })
+  }
+  return [...touched.values()]
+}
+
+/** After the agent acted: count its answer toward open cases, then let the case rules decide on a human. */
+async function followUpCases(run: Run, touched: MemberCase[], target: InboundMessage, outcome: RunOutcome, reply?: string): Promise<RunOutcome> {
+  let next = outcome
+  for (const t of touched) {
+    let c = getCase(t.id)
+    if (!c || c.status === 'resolved') continue
+    if (outcome === 'answered' && reply && c.userId === target.userId) c = noteReply(c, 'pulse', reply)
+    if (c.status !== 'open') continue
+    const e = shouldEscalate(c)
+    if (!e) continue
+    const step = run.steps.begin('flag', `Bring in a human for ${c.userName.split(' ')[0]}`, e.reason, undefined, ['slack.chat.postmessage.create'])
+    await escalate(c, e, run.id)
+    step.ok(`${e.reason} · mood ${moodTrend(c, 4).map(fmtMood).join(' → ')}`, { case: c.id })
+    next = 'escalated'
+  }
+  return next
+}
+
 async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
   const relevant = batch.filter((m) => m.joined || !isNoise(m.text) || m.addressed)
-  if (!relevant.length) return
-  const target = relevant[relevant.length - 1]!
+  // Members with an open case: even "ok thanks" matters (it may mean it's solved).
+  const followed = batch.filter((m) => !m.joined && !relevant.includes(m) && caseOf(m.platform, m.userId, !!m.simulated))
+  if (!relevant.length && !followed.length) return
+  const lead = relevant.length ? relevant : followed
+  const target = lead[lead.length - 1]!
   // Scripted demo runs use the most reliable chain (Claude first); real traffic stays on the fast free chain.
   const model = target.simulated ? consoleModel() ?? communityModel() : communityModel()
+  const history = readHistory(key, 40)
+
+  // Mood is read while the agent gets ready: a fast small model, keywords if it's slow.
+  const moodBatch = [...relevant.filter((m) => !m.joined), ...followed]
+  const openHere = activeCases().filter((c) => c.chatId === target.chatId && !!c.simulated === !!target.simulated)
+  const moodP = readMood(moodBatch, { history, openCases: openHere.map((c) => ({ userName: c.userName, topic: c.topic, mood: c.mood })) }, { model: lightModel(), recentAsks: asksToday })
 
   // Feedback while thinking: Telegram "typing…", Slack 👀 on the question.
-  if (!target.simulated && (target.addressed || isQuestionLike(target.text))) {
+  if (relevant.length && !target.simulated && (target.addressed || isQuestionLike(target.text))) {
     if (target.platform === 'telegram') void channels.telegram?.typing(target.chatId)
     if (target.platform === 'slack') void channels.slack?.ack(target.chatId, target.msgId, 'eyes')
   }
 
-  const run = startRun('community', relevant.map((m) => `${m.userName}: ${m.text}`).join('\n'), {
+  const run = startRun('community', lead.map((m) => `${m.userName}: ${m.text}`).join('\n'), {
     platform: target.platform,
     chatId: target.chatId,
     userName: target.userName,
     simulated: target.simulated,
   })
   try {
+    const readings = await moodP
+    const touched = trackMood(run, moodBatch, readings)
+
+    // Only case follow-ups ("thanks!", "ok"): no agent needed, the case rules decide.
+    if (!relevant.length) {
+      const outcome = await followUpCases(run, touched, target, 'silent')
+      run.end(outcome, { summary: touched.some((c) => getCase(c.id)?.status === 'resolved') ? 'member sorted: case closed' : 'case updated' })
+      return
+    }
+
     if (!model) {
       const outcome = await fallbackAnswer(relevant, run.id)
-      run.end(outcome, { summary: 'no LLM configured: knowledge-base fallback' })
+      run.end(await followUpCases(run, touched, target, outcome), { summary: 'no LLM configured: knowledge-base fallback' })
       return
     }
     const waiting = waitingQuestions()
       .filter((p) => p.chatId === target.chatId && p.platform === target.platform)
       .map((p) => p.question)
-    const history = readHistory(key, 40)
-    const signals = signalsFor(relevant, history)
+    const signals = signalsFor(relevant, history, readings)
 
     // A question aimed at another member is theirs to answer: Pulse stays out of it
     // (the care sweep revives it if nobody replies).
     if (!target.addressed && relevant.every((m) => signals.find((x) => x.msgId === m.msgId)?.directedAt && isQuestionLike(m.text))) {
       run.steps.record('silent', 'Stay silent', 'ok', `question aimed at @${signals[0]?.directedAt}, not Pulse; the care sweep will follow up if nobody answers`)
-      run.end('silent')
+      run.end(await followUpCases(run, touched, target, 'silent'))
       return
     }
 
@@ -147,25 +209,12 @@ async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
     })
     if (result.error && result.outcome === 'failed') {
       const outcome = await fallbackAnswer(relevant, run.id)
-      run.end(outcome === 'answered' ? 'answered' : 'failed', { summary: `model error: ${result.error.slice(0, 120)}` })
+      run.end(await followUpCases(run, touched, target, outcome === 'answered' ? 'answered' : 'failed'), { summary: `model error: ${result.error.slice(0, 120)}` })
       return
     }
-    // Safety net in code: strong frustration or a request for a human always reaches the organizers.
-    let outcome = result.outcome
-    if (outcome !== 'escalated') {
-      const upset = relevant.find((m) => {
-        const sig = signals.find((x) => x.msgId === m.msgId)
-        return (sig?.frustration ?? 0) >= 0.6 || wantsHuman(m.text)
-      })
-      if (upset) {
-        const reason = wantsHuman(upset.text) ? 'asked for a human' : 'strong frustration signals'
-        openAttention({ kind: wantsHuman(upset.text) ? 'needs_human' : 'frustrated', platform: upset.platform, chatId: upset.chatId, msgId: upset.msgId, userId: upset.userId, userName: upset.userName, text: upset.text, reason, simulated: upset.simulated })
-        if (modsAvailable()) await postModsCard(`😤 **${upset.userName} needs a human**  ·  ${platformLabel(upset.platform)}\n${quote(upset.text)}\n_${reason} (safety net)_`, { runId: run.id })
-        run.steps.record('flag', `Flag ${upset.userName} for the organizers`, 'ok', `${reason} (code safety net)`, undefined, modsAvailable() ? ['slack.chat.postmessage.create'] : undefined)
-        outcome = 'escalated'
-      }
-    }
-    run.end(outcome, { reply: result.reply })
+    // The case rules (mood trend, repeat asks, "still stuck after an answer", asking for a
+    // person) decide whether organizers need to step in, whatever the agent chose.
+    run.end(await followUpCases(run, touched, target, result.outcome, result.reply), { reply: result.reply })
   } catch (e) {
     run.end('failed', { summary: String((e as Error).message).slice(0, 160) })
   }

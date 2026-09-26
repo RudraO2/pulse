@@ -113,6 +113,28 @@ const schema = z.object({
     .transform((v) => (v && Number.isFinite(Number(v)) ? Number(v) : 5)),
   /** If set, write actions on the dashboard (console, approvals, demo) need this token. */
   ADMIN_TOKEN: opt,
+
+  // ── Organizer notifications + phone app ──
+  /** Email the organizer (DIGEST_TO) whenever something needs them. */
+  NOTIFY_EMAIL: bool(true),
+  /** Minutes between bundled "needs you" emails (urgent ones go out right away). */
+  NOTIFY_BUNDLE_MIN: z
+    .string()
+    .optional()
+    .transform((v) => (v && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 3)),
+  /** Also notify for scripted demo traffic (so the phone buzzes on stage). */
+  NOTIFY_SCRIPTED: bool(true),
+  /** Name shown when an organizer replies to a member from the Pulse app. */
+  ORGANIZER_NAME: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim() || 'the team'),
+  /** `cloudflared`: open a free HTTPS tunnel so the phone app works anywhere. */
+  TUNNEL: z
+    .string()
+    .optional()
+    .transform((v) => (v?.trim().toLowerCase() === 'cloudflared' ? 'cloudflared' : undefined)),
+  CLOUDFLARED_BIN: opt,
 })
 
 export type Env = z.infer<typeof schema> & { MODE: 'live' | 'replay' | 'mock' }

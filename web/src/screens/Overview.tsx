@@ -6,9 +6,10 @@ import { Link } from 'react-router'
 import type { Counters } from '@shared/events'
 import { ActivityRow } from '../components/ActivityRow'
 import { DecisionButtons } from '../components/ApprovalCard'
+import { CASE_LABEL, CASE_TONE, MoodLine, memberScores, moodWord, visibleCases } from '../components/Mood'
 import { clock, ms, timeAgo } from '../lib/format'
 import { useStore } from '../lib/store'
-import { Button, Card, CardHeader, EmptyState, Metrics, PageHeader, PlatformIcon, Segmented, ShowMore } from '../ui/primitives'
+import { Avatar, Badge, Button, Card, CardHeader, EmptyState, Metrics, PageHeader, PlatformIcon, Segmented, ShowMore } from '../ui/primitives'
 
 const sum = (a: Counters, b: Counters): Counters => Object.fromEntries(Object.keys(a).map((k) => [k, a[k as keyof Counters] + b[k as keyof Counters]])) as unknown as Counters
 
@@ -156,6 +157,33 @@ function NeedsYou() {
   )
 }
 
+/* ── People: members Pulse is following until their problem is solved ── */
+
+function People({ real }: { real: boolean }) {
+  const cases = useStore((s) => visibleCases(s.cases, real))
+  if (!cases.length) return null
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader title="People" action={<HeaderLink to="/inbox">Inbox</HeaderLink>} />
+      <ul className="divide-y divide-line">
+        {cases.slice(0, 4).map((c) => (
+          <li key={c.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3" title={c.escalation?.reason ?? c.resolution ?? `Mood ${moodWord(c.mood).toLowerCase()}`}>
+            <Avatar name={c.userName} size={28} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[13.5px] font-medium text-fg">
+                <span className="truncate">{c.userName}</span>
+                <Badge tone={CASE_TONE[c.status]}>{CASE_LABEL[c.status]}</Badge>
+              </div>
+              <div className="mt-0.5 truncate text-[12px] text-fg-3">{c.topic}</div>
+            </div>
+            <MoodLine scores={memberScores(c)} />
+          </li>
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
 /* ── Invite: QR codes live behind one button until you need them ── */
 
 function Qr({ url, label, platform }: { url?: string; label: string; platform: 'telegram' | 'slack' }) {
@@ -268,6 +296,7 @@ export function OverviewScreen() {
 
         <div className="grid min-w-0 grid-cols-1 gap-5">
           <NeedsYou />
+          <People real={real} />
           <Card className="overflow-hidden">
             <CardHeader title="Swytchcode" action={<HeaderLink to="/guardrails">Guardrails</HeaderLink>} />
             <div className="grid grid-cols-3 divide-x divide-line">

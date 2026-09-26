@@ -4,6 +4,7 @@ import { post } from '../core/channels.js'
 import { modsAvailable, platformLabel, postModsCard, quote } from '../core/mods.js'
 import { startRun } from '../core/runs.js'
 import { createPending, openAttention, savePending } from '../core/state-docs.js'
+import { sweepCases } from '../core/cases.js'
 import { markUsed, searchKnowledge } from '../kb/knowledge.js'
 import { watchModsThread } from '../pipeline.js'
 import { markAnswered, markEscalated, unansweredQuestions, type StoredMessage } from '../store/repo.js'
@@ -85,7 +86,11 @@ async function nudge(m: StoredMessage, runId: string, steps: ReturnType<typeof s
 
 export function startScheduler(): void {
   if (!sweepTimer) {
-    sweepTimer = setInterval(() => void runSweep().catch((e) => bus.emit({ type: 'log', level: 'error', text: `sweep: ${(e as Error).message}` })), env.SWEEP_EVERY_MIN * 60_000)
+    sweepTimer = setInterval(() => {
+      void runSweep().catch((e) => bus.emit({ type: 'log', level: 'error', text: `sweep: ${(e as Error).message}` }))
+      // Upset members left waiting get a human; quiet cases close themselves.
+      void sweepCases().catch((e) => bus.emit({ type: 'log', level: 'error', text: `case sweep: ${(e as Error).message}` }))
+    }, env.SWEEP_EVERY_MIN * 60_000)
     sweepTimer.unref?.()
   }
   if (!digestTimer) {

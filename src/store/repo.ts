@@ -144,7 +144,7 @@ export function recentRuns(limit = 100): RunSummary[] {
 
 // ── docs (approvals, attention, pending mod questions) ─────────────────────
 
-export type DocKind = 'approval' | 'attention' | 'pending'
+export type DocKind = 'approval' | 'attention' | 'pending' | 'case' | 'push'
 
 export function putDoc<T extends { id: string; status: string }>(kind: DocKind, doc: T, createdAt = Date.now()): void {
   getDb()

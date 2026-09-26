@@ -7,7 +7,7 @@ const ICON = { info: Info, ok: CircleCheck, warn: ShieldAlert, bad: CircleAlert 
 // Toasts sit on an ink surface in both themes, so they use fixed tints.
 const TONE = { info: 'text-[#9db2ff]', ok: 'text-[#5fd393]', warn: 'text-[#f2b552]', bad: 'text-[#f58a80]' }
 
-export function Toasts() {
+export function Toasts({ className = 'right-5 bottom-5' }: { className?: string }) {
   const toasts = useStore((s) => s.toasts)
   useEffect(() => {
     if (!toasts.length) return
@@ -15,7 +15,7 @@ export function Toasts() {
     return () => clearTimeout(t)
   }, [toasts])
   return (
-    <div className="pointer-events-none fixed right-5 bottom-5 z-50 flex w-[380px] max-w-[calc(100vw-2rem)] flex-col gap-2" aria-live="polite">
+    <div className={clsx('pointer-events-none fixed z-50 flex', className, 'w-[380px] max-w-[calc(100vw-2rem)] flex-col gap-2')} aria-live="polite">
       {toasts.map((t) => {
         const Icon = ICON[t.tone]
         return (

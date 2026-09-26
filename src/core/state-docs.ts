@@ -41,9 +41,19 @@ export function openAttention(a: Omit<AttentionItem, 'id' | 'status' | 'ts'>): A
   return item
 }
 
-export function resolveAttention(id: string): AttentionItem | undefined {
+/** Remember the #mods card (and case) of an attention item so follow-ups land in its thread. */
+export function updateAttention(id: string, patch: Partial<Pick<AttentionItem, 'modsTs' | 'caseId'>>): AttentionItem | undefined {
   const item = getDoc<AttentionItem>('attention', id)
   if (!item) return undefined
+  const next: AttentionItem = { ...item, ...patch }
+  putDoc('attention', next, item.ts)
+  bus.emit({ type: 'attention', item: next })
+  return next
+}
+
+export function resolveAttention(id: string): AttentionItem | undefined {
+  const item = getDoc<AttentionItem>('attention', id)
+  if (!item || item.status === 'resolved') return item
   const next: AttentionItem = { ...item, status: 'resolved' }
   putDoc('attention', next, item.ts)
   bus.emit({ type: 'attention', item: next })

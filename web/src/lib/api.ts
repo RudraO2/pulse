@@ -25,7 +25,7 @@ async function request<T>(method: 'GET' | 'POST', url: string, body?: unknown): 
 }
 
 export const api = {
-  console: (text: string) => request<{ runId: string }>('POST', '/api/console', { text }),
+  console: (text: string, about?: { kind: 'member'; id: string }) => request<{ runId: string }>('POST', '/api/console', { text, ...(about ? { about } : {}) }),
   approve: (id: string) => request('POST', `/api/approvals/${id}`, { decision: 'approve' }),
   reject: (id: string) => request('POST', `/api/approvals/${id}`, { decision: 'reject' }),
   resolveAttention: (id: string) => request('POST', `/api/attention/${id}/resolve`),
@@ -37,10 +37,26 @@ export const api = {
   audit: () => request<AuditInfo>('GET', '/api/audit'),
   scenarios: () => request<ScenarioInfo[]>('GET', '/api/scenarios'),
   demo: (action: 'play' | 'pause' | 'resume' | 'stop' | 'reset' | 'speed', body: Record<string, unknown> = {}) => request('POST', `/api/demo/${action}`, body),
+  // phone app
+  pair: () => request<PairInfo>('GET', '/api/pair'),
+  resolveCase: (id: string) => request('POST', `/api/cases/${id}/resolve`),
+  replyCase: (id: string, text: string) => request<{ ok: boolean; error?: string }>('POST', `/api/cases/${id}/reply`, { text }),
+  answerPending: (id: string, text: string) => request<{ ok?: boolean; error?: string }>('POST', `/api/pending/${id}/answer`, { text }),
+  pushKey: () => request<{ key: string }>('GET', '/api/push/key'),
+  pushSubscribe: (subscription: PushSubscriptionJSON) => request<{ devices: number }>('POST', '/api/push/subscribe', { subscription }),
+  pushTest: () => request<{ sent: number }>('POST', '/api/push/test'),
   refresh: async () => {
     const snap = await request<StateSnapshot>('GET', '/api/state')
     if (snap) store.hydrate(snap)
   },
+}
+
+export interface PairInfo {
+  tunnel: 'off' | 'starting' | 'up' | 'down'
+  publicUrl?: string
+  url?: string
+  lanUrl?: string
+  devices: number
 }
 
 export interface PolicyRule {

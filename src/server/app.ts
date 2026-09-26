@@ -15,7 +15,7 @@ import type { SequencedEvent } from '../shared/events.js'
 // Ported from the WhatsApp bot's server.ts (sseSend / ping / /api/state).
 
 export interface AppHandlers {
-  onConsole?: (text: string) => Promise<unknown>
+  onConsole?: (text: string, about?: { kind: 'member'; id: string }) => Promise<unknown>
   onApproval?: (id: string, decision: 'approve' | 'reject', by: string) => Promise<unknown>
   onResolveAttention?: (id: string) => Promise<unknown>
   onDigest?: () => Promise<unknown>
@@ -25,6 +25,20 @@ export interface AppHandlers {
   guardrails?: () => Promise<unknown>
   audit?: () => Promise<unknown>
   scenarios?: () => unknown
+  // phone app
+  onCaseResolve?: (id: string, by: string) => Promise<unknown>
+  onCaseReply?: (id: string, text: string) => Promise<unknown>
+  onAnswerPending?: (id: string, text: string) => Promise<unknown>
+  /** phone pairing link (contains the admin token: only served to this laptop) */
+  pair?: () => Promise<unknown>
+  push?: {
+    key: () => string
+    subscribe: (sub: unknown, ua?: string) => Promise<unknown>
+    unsubscribe: (endpoint: string) => Promise<unknown>
+    test: () => Promise<unknown>
+  }
+  /** notification buttons: signed per item, no token needed */
+  quick?: (id: string, action: string, sig: string) => Promise<{ ok: boolean; error?: string; status?: number } & Record<string, unknown>>
   onDemo?: (action: 'play' | 'pause' | 'resume' | 'stop' | 'reset' | 'speed', body: Record<string, unknown>) => Promise<unknown>
 }
 
@@ -32,8 +46,8 @@ export interface AppOptions extends AppHandlers {
   store: StateStore
   /** directory with the built dashboard (index.html + assets) */
   webRoot?: string
-  /** if set, operator actions require this token */
-  adminToken?: string
+  /** if set, operator actions (and, from outside this laptop, reads) require this token */
+  adminToken?: string | (() => string | undefined)
   pollTimeoutMs?: number
   pingMs?: number
 }
@@ -47,6 +61,16 @@ const SSE_HEADERS = {
 
 export function formatSse(ev: SequencedEvent): string {
   return `id: ${ev.seq}\nevent: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`
+}
+
+/**
+ * A request made on this laptop (not through the tunnel or a proxy). cloudflared
+ * connects from localhost too, but always adds cf-* / x-forwarded-for headers.
+ */
+export function isLocal(c: Context): boolean {
+  if (c.req.header('cf-connecting-ip') || c.req.header('cf-ray') || c.req.header('x-forwarded-for') || c.req.header('x-real-ip')) return false
+  const addr = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? ''
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 }
 
 function clientId(c: Context): string {
@@ -73,11 +97,20 @@ export function createApp(opts: AppOptions): Hono {
 
   app.use('/api/*', bodyLimit({ maxSize: 64 * 1024, onError: c => c.json({ error: 'body too large' }, 413) }))
 
+  const expected = () => (typeof opts.adminToken === 'function' ? opts.adminToken() : opts.adminToken)
+  const authorized = (c: Context) => {
+    const want = expected()
+    if (!want || isLocal(c)) return true
+    return (c.req.header('x-admin-token') || c.req.query('token')) === want
+  }
   const requireAdmin = async (c: Context, next: () => Promise<void>) => {
-    if (opts.adminToken) {
-      const tok = c.req.header('x-admin-token') || c.req.query('token')
-      if (tok !== opts.adminToken) return c.json({ error: 'admin token required' }, 401)
-    }
+    if (!authorized(c)) return c.json({ error: 'admin token required' }, 401)
+    await next()
+  }
+  // Community messages and approvals are private: from outside this laptop, reads need the token too.
+  const requireReader = requireAdmin
+  const requireLocal = async (c: Context, next: () => Promise<void>) => {
+    if (!isLocal(c)) return c.json({ error: 'only available on the Pulse laptop' }, 403)
     await next()
   }
 
@@ -94,14 +127,14 @@ export function createApp(opts: AppOptions): Hono {
 
   app.get('/healthz', c => c.json({ ok: true, uptime: Math.round((Date.now() - startedAt) / 1000), seq: bus.currentSeq }))
 
-  app.get('/api/state', c => {
+  app.get('/api/state', requireReader, c => {
     c.header('Cache-Control', 'no-store')
     return c.json(store.snapshot())
   })
 
   // ── live stream (SSE) ─────────────────────────────────────────────────────
 
-  app.get('/api/events', c => {
+  app.get('/api/events', requireReader, c => {
     const resumeRaw = c.req.header('Last-Event-ID') ?? c.req.query('since')
     const resumeFrom = resumeRaw !== undefined && resumeRaw !== '' ? Number(resumeRaw) : NaN
     const enc = new TextEncoder()
@@ -141,7 +174,7 @@ export function createApp(opts: AppOptions): Hono {
 
   // ── long-poll fallback ────────────────────────────────────────────────────
 
-  app.get('/api/events/poll', async c => {
+  app.get('/api/events/poll', requireReader, async c => {
     const since = Number(c.req.query('since') ?? 0)
     const timeout = Math.min(Number(c.req.query('timeout') ?? pollTimeout), pollTimeout)
     if (!Number.isFinite(since)) return c.json({ error: 'since must be a number' }, 400)
@@ -166,7 +199,8 @@ export function createApp(opts: AppOptions): Hono {
     const hits = (consoleHits.get(who) ?? []).filter(t => now - t < 60_000)
     if (hits.length >= 10) return c.json({ error: 'slow down, try again in a minute' }, 429)
     consoleHits.set(who, [...hits, now])
-    return c.json((await opts.onConsole(text)) ?? { ok: true })
+    const about = body.about && typeof body.about === 'object' && typeof (body.about as { id?: unknown }).id === 'string' ? { kind: 'member' as const, id: String((body.about as { id: string }).id) } : undefined
+    return c.json((await opts.onConsole(text, about)) ?? { ok: true })
   })
 
   app.post('/api/approvals/:id', requireAdmin, async c => {
@@ -181,8 +215,54 @@ export function createApp(opts: AppOptions): Hono {
   app.post('/api/selftest', requireAdmin, c => call(opts.onSelftest, c))
   app.post('/api/sweep', requireAdmin, c => call(opts.onSweep, c))
   app.post('/api/kb/sync', requireAdmin, c => call(opts.onKbSync, c))
-  app.get('/api/guardrails', c => call(opts.guardrails, c))
-  app.get('/api/audit', c => call(opts.audit, c))
+  app.get('/api/guardrails', requireReader, c => call(opts.guardrails, c))
+  app.get('/api/audit', requireReader, c => call(opts.audit, c))
+
+  // ── phone app ─────────────────────────────────────────────────────────────
+
+  const textBody = async (c: Context): Promise<string> => {
+    const body = await readJson(c)
+    return typeof body.text === 'string' ? body.text.trim().slice(0, 2000) : ''
+  }
+  app.get('/api/auth', c => c.json({ ok: authorized(c), local: isLocal(c) }))
+  app.get('/api/pair', requireLocal, c => call(opts.pair, c))
+  app.post('/api/cases/:id/resolve', requireAdmin, c => call(opts.onCaseResolve && (() => opts.onCaseResolve!(c.req.param('id') ?? '', 'Organizer (app)')), c))
+  app.post('/api/cases/:id/reply', requireAdmin, async c => {
+    const text = await textBody(c)
+    if (!text) return c.json({ error: 'text required' }, 400)
+    return call(opts.onCaseReply && (() => opts.onCaseReply!(c.req.param('id') ?? '', text)), c)
+  })
+  app.post('/api/pending/:id/answer', requireAdmin, async c => {
+    const text = await textBody(c)
+    if (!text) return c.json({ error: 'text required' }, 400)
+    return call(opts.onAnswerPending && (() => opts.onAnswerPending!(c.req.param('id') ?? '', text)), c)
+  })
+  app.get('/api/push/key', c => (opts.push ? c.json({ key: opts.push.key() }) : c.json({ error: 'push not available' }, 503)))
+  app.post('/api/push/subscribe', requireAdmin, async c => {
+    if (!opts.push) return c.json({ error: 'push not available' }, 503)
+    const body = await readJson(c)
+    try {
+      return c.json((await opts.push.subscribe(body.subscription, c.req.header('user-agent'))) ?? { ok: true })
+    } catch (e) {
+      return c.json({ error: String((e as Error).message) }, 400)
+    }
+  })
+  app.post('/api/push/unsubscribe', requireAdmin, async c => {
+    const body = await readJson(c)
+    return call(opts.push && typeof body.endpoint === 'string' ? () => opts.push!.unsubscribe(body.endpoint as string) : undefined, c)
+  })
+  app.post('/api/push/test', requireAdmin, c => call(opts.push?.test, c))
+  const quickHits: number[] = []
+  app.post('/api/quick', async c => {
+    if (!opts.quick) return c.json({ error: 'not available' }, 503)
+    const now = Date.now()
+    while (quickHits.length && now - quickHits[0]! > 60_000) quickHits.shift()
+    if (quickHits.length >= 30) return c.json({ error: 'slow down' }, 429)
+    quickHits.push(now)
+    const body = await readJson(c)
+    const res = await opts.quick(String(body.id ?? ''), String(body.action ?? ''), String(body.sig ?? ''))
+    return c.json(res, (res.status ?? (res.ok ? 200 : 400)) as 200)
+  })
   app.get('/api/scenarios', c => c.json(opts.scenarios?.() ?? []))
 
   app.post('/api/demo/:action', requireAdmin, async c => {
@@ -198,6 +278,20 @@ export function createApp(opts: AppOptions): Hono {
   // ── dashboard SPA ─────────────────────────────────────────────────────────
 
   const relRoot = path.relative(process.cwd(), webRoot) || '.'
+  // The phone app: its own page, manifest and service worker (scope /m/).
+  const phone = (c: Context) => {
+    const file = path.join(webRoot, 'm.html')
+    if (!fs.existsSync(file)) return c.text('Phone app not built yet: run `npm run build:web`.', 503)
+    c.header('Cache-Control', 'no-store')
+    return c.html(fs.readFileSync(file, 'utf-8'))
+  }
+  app.get('/m', c => c.redirect('/m/'))
+  app.get('/m/', phone)
+  app.get('/m/sw.js', async (c, next) => {
+    c.header('Cache-Control', 'no-cache')
+    c.header('Service-Worker-Allowed', '/m/')
+    await next()
+  })
   app.use('/*', serveStatic({ root: relRoot }))
   app.get('*', c => {
     const index = path.join(webRoot, 'index.html')

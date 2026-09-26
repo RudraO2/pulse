@@ -1,0 +1,21 @@
+{
+  "name": "Pulse",
+  "short_name": "Pulse",
+  "description": "Approve, answer and look after your community from your phone.",
+  "id": "/m/",
+  "start_url": "/m/",
+  "scope": "/m/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f6f8",
+  "theme_color": "#f5f6f8",
+  "icons": [
+    { "src": "/m/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/m/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/m/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Needs you", "url": "/m/#/", "icons": [{ "src": "/m/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Ask Pulse", "url": "/m/#/ask", "icons": [{ "src": "/m/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

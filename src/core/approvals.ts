@@ -228,10 +228,10 @@ export async function decide(id: string, decision: 'approve' | 'reject', by: str
 
 async function executeAction(a: Approval, action: ApprovalAction, i: number): Promise<ApprovalAction> {
   const key = `${a.id}:${i}`
-  const meta = (action.meta ?? {}) as { platform?: Platform; chatId?: string; text?: string; threadTs?: string; entry?: NewEntry; entryId?: string; patch?: Partial<NewEntry> }
+  const meta = (action.meta ?? {}) as { platform?: Platform; chatId?: string; text?: string; threadTs?: string; replyToId?: string; entry?: NewEntry; entryId?: string; patch?: Partial<NewEntry> }
   try {
     if ((action.tool === TOOL.tgSend || action.tool === TOOL.slackPost) && meta.platform && meta.chatId && meta.text) {
-      const res = await post(meta.platform, meta.chatId, meta.text, { key, runId: a.runId, threadTs: meta.threadTs, simulated: a.simulated })
+      const res = await post(meta.platform, meta.chatId, meta.text, { key, runId: a.runId, threadTs: meta.threadTs, replyToId: meta.replyToId, simulated: a.simulated })
       if (!res.ok) return { ...action, ok: false, result: res.blocked ? `blocked by ${res.blocked.policyId ?? res.blocked.kind}` : res.error }
       const posted = `posted${res.msgId ? ` (${res.msgId})` : ''}`
       if (action.pin && res.msgId) {

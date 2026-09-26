@@ -3,7 +3,7 @@ import type { Counters, GtEvent, SequencedEvent, StateSnapshot } from '@shared/e
 // Client state = the server snapshot + every live event folded in.
 // Pure functions; store.ts owns the instance.
 
-export type Connection = 'connecting' | 'sse' | 'poll' | 'offline'
+export type Connection = 'connecting' | 'sse' | 'poll' | 'offline' | 'locked'
 
 export interface Toast {
   id: number
@@ -45,6 +45,8 @@ export function initialState(): ClientState {
     approvals: [],
     attention: [],
     pending: [],
+    cases: [],
+    notify: { email: false, devices: 0, queued: 0, tunnel: 'off' },
     helpers: [],
     guardrails: [],
     selftest: [],
@@ -149,6 +151,13 @@ export function applyEvent(s: ClientState, ev: SequencedEvent): ClientState {
       return next
     case 'pending':
       next.pending = upsertBy(next.pending, ev.item, (p) => p.id)
+      return next
+    case 'case':
+      next.cases = upsertBy(next.cases ?? [], ev.item, (c) => c.id)
+      return next
+    case 'notify':
+      next.notify = ev.state
+      if (ev.sent?.channel === 'email') return pushToast(next, ev.sent.ok ? 'ok' : 'bad', ev.sent.ok ? `Emailed you: ${ev.sent.detail.split(' → ')[0]}` : `Email: ${ev.sent.detail}`)
       return next
     case 'status':
       next.services = { ...next.services, [ev.service]: ev.status }

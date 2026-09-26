@@ -68,8 +68,12 @@ const helpers: Beat[] = [
 ]
 
 const care: Beat[] = [
-  { caption: 'A frustrated member: Pulse answers with empathy and flags a human' },
+  { caption: 'A frustrated member: Pulse reads the mood, answers with empathy and brings in a human' },
   { say: 'rohan', text: 'SERIOUSLY?? swy exec just hangs forever when I call it from node. nothing works, 30 mins wasted' },
+  { settle: true },
+  { caption: 'Pulse follows Rohan until it is solved: the mood lifts and the case closes itself' },
+  { pause: 2500 },
+  { say: 'rohan', text: 'ok that was it, the async wrapper fixed it. works now 🙏 thanks' },
   { settle: true },
   { caption: 'A question aimed at someone else goes unanswered: the care sweep catches it' },
   { say: 'dev', text: '@Neha can you check if my Commudle submission link is saved? not sure it went through' },
@@ -111,13 +115,13 @@ export const SCENARIOS: Scenario[] = [
   {
     id: 'full',
     title: 'Full demo',
-    description: 'The 2.5-minute story: Pulse learns from an organizer, a member helps a member, a frustrated member gets care, and the organizer runs an announcement from the Console.',
-    shows: ['Learning loop', 'Member → FAQ', 'Care', 'Console + approvals'],
-    beats: [...learn, ...helpers, ...care.slice(0, 3), ...announce],
+    description: 'The 2.5-minute story: Pulse learns from an organizer, a member helps a member, a frustrated member is followed until sorted, and the organizer runs an announcement from the Console.',
+    shows: ['Learning loop', 'Member → FAQ', 'Mood + care', 'Console + approvals'],
+    beats: [...learn, ...helpers, ...care.slice(0, 7), ...announce],
   },
   { id: 'learn', title: 'Learns from organizers', description: 'Unknown question → #mods → organizer answers once → saved to Notion → the next member gets an instant answer.', shows: ['Slack #mods', 'Notion write', 'Instant repeat answer'], beats: learn },
   { id: 'helpers', title: 'Member helps member', description: 'A member answers another; Pulse proposes saving it; an organizer approves with ✅.', shows: ['Approval', 'Helper credit'], beats: helpers },
-  { id: 'care', title: 'Care for members', description: 'Frustration gets empathy plus a human; an ignored question is revived by the care sweep.', shows: ['Escalation', 'Sweep'], beats: care },
+  { id: 'care', title: 'Care for members', description: 'Mood is read per message; a frustrated member gets empathy plus a human, and the case closes when they say it works. An ignored question is revived by the care sweep.', shows: ['Mood', 'Escalation', 'Case closed', 'Sweep'], beats: care },
   { id: 'newcomers', title: 'Newcomer rush', description: 'Welcomes, FAQ answers with Notion links, and knowing when to stay silent.', shows: ['Welcome', 'Answers', 'Silence'], beats: newcomers },
   { id: 'announce', title: 'Console announcement', description: 'Plain-English request → plan → Swytchcode dry-run previews → approval → posts, pin and FAQ update.', shows: ['Console', 'Dry-run', 'Approval'], beats: announce },
   { id: 'digest', title: 'Organizer digest', description: 'Stats → digest written by the agent → Resend email → archived in Notion.', shows: ['Resend', 'Notion'], beats: digest },

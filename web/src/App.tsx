@@ -1,10 +1,11 @@
 import clsx from 'clsx'
-import { ChevronDown, Monitor, Moon, Pause, Play, Sparkles, Sun } from 'lucide-react'
+import { ChevronDown, Monitor, Moon, Pause, Play, Smartphone, Sparkles, Sun } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { HashRouter, NavLink, Route, Routes } from 'react-router'
 import type { ServiceName } from '@shared/events'
 import { CommandPalette } from './components/CommandPalette'
 import { Heartbeat } from './components/Heartbeat'
+import { PhoneDialog } from './components/PhoneDialog'
 import { RunDrawerHost } from './components/RunDrawer'
 import { Toasts } from './components/Toasts'
 import { api } from './lib/api'
@@ -120,6 +121,8 @@ function Sidebar() {
 
 function TopBar() {
   const { dark, present } = usePrefs()
+  const [phone, setPhone] = useState(false)
+  const devices = useStore((s) => s.notify.devices)
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/85 backdrop-blur-md">
       <div className="flex items-center gap-3 px-4 py-2.5 md:px-6 xl:px-8">
@@ -137,7 +140,11 @@ function TopBar() {
         </button>
         <div className="ml-auto flex items-center gap-1">
           <Heartbeat />
-          <button onClick={togglePresent} aria-pressed={present} className={clsx('ml-2 hidden size-[34px] place-items-center rounded-lg md:grid', present ? 'bg-accent-soft text-accent' : 'text-fg-3 hover:bg-hover hover:text-fg')} aria-label="Presenter mode" title="Presenter mode (P)">
+          <button onClick={() => setPhone(true)} className="relative ml-2 grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="Pulse on your phone" title="Pulse on your phone">
+            <Smartphone className="size-4" />
+            {devices > 0 && <span className="absolute top-[7px] right-[8px] size-1.5 rounded-full bg-ok" />}
+          </button>
+          <button onClick={togglePresent} aria-pressed={present} className={clsx('hidden size-[34px] place-items-center rounded-lg md:grid', present ? 'bg-accent-soft text-accent' : 'text-fg-3 hover:bg-hover hover:text-fg')} aria-label="Presenter mode" title="Presenter mode (P)">
             <Monitor className="size-4" />
           </button>
           <button onClick={toggleTheme} className="grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label={dark ? 'Light theme' : 'Dark theme'} title={dark ? 'Light theme' : 'Dark theme'}>
@@ -146,6 +153,7 @@ function TopBar() {
         </div>
       </div>
       <ScenarioBanner />
+      {phone && <PhoneDialog onClose={() => setPhone(false)} />}
     </header>
   )
 }

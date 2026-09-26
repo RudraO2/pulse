@@ -4,6 +4,8 @@ import { bus } from '../bus.js'
 import { allEntries } from '../kb/knowledge.js'
 import { allApprovals } from '../core/approvals.js'
 import { allAttention, allPending } from '../core/state-docs.js'
+import { allCases } from '../core/cases.js'
+import { notifyState } from '../core/notify.js'
 import { getDb } from '../store/db.js'
 import { kvGetJson, kvSetJson, recentMessages, recentRuns, topHelpers, upsertRun } from '../store/repo.js'
 import type {
@@ -239,6 +241,8 @@ export function createStateStore(opts: StateStoreOptions = {}): StateStore {
       approvals: persist ? allApprovals(100) : [],
       attention: persist ? allAttention(100) : [],
       pending: persist ? allPending(100) : [],
+      cases: persist ? allCases(100) : [],
+      notify: notifyState(),
       helpers: persist ? topHelpers(10) : [],
       guardrails,
       selftest,

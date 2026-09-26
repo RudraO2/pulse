@@ -1,4 +1,6 @@
+import os from 'node:os'
 import path from 'node:path'
+import type { PushSubscription } from 'web-push'
 import { bus } from './bus.js'
 import { env, hasLLM, hasNotion, hasResend, hasSlack, hasTelegram } from './config/env.js'
 import { registerLearningFollowUps } from './agent/learn.js'
@@ -6,7 +8,13 @@ import { SlackAdapter } from './channels/slack.js'
 import { TelegramAdapter } from './channels/telegram.js'
 import { decide, startApprovalWatcher } from './core/approvals.js'
 import { channels } from './core/channels.js'
-import { resolveAttention } from './core/state-docs.js'
+import { getPending, resolveAttention } from './core/state-docs.js'
+import { getCase, handedOff, linkCasesToAttention, replyToMember, resolveCase } from './core/cases.js'
+import { onApprovalExecuted } from './core/approvals.js'
+import { postModsCard, quote } from './core/mods.js'
+import { addDevice, adminToken, ensureAdminToken, notifyState, pushToDevices, removeDevice, startNotifier, vapidPublicKey, verifyItem } from './core/notify.js'
+import { startTunnel, stopTunnel } from './core/tunnel.js'
+import { handleModReply } from './agent/learn.js'
 import { startKnowledgeSync, syncKnowledge } from './kb/knowledge.js'
 import { createPipeline, ingest, rewatchPending } from './pipeline.js'
 import { createApp, startServer } from './server/app.js'
@@ -57,6 +65,16 @@ async function main(): Promise<void> {
   // ── agents ────────────────────────────────────────────────────────────────
   const batcher = createPipeline()
   registerLearningFollowUps()
+  // Cases first: an escalation gets linked to its case before the notifier describes it.
+  linkCasesToAttention()
+  // An approved reply to a member (from their card) takes it off the organizer's list; Pulse keeps watching.
+  onApprovalExecuted('post', (a) => {
+    const m = a.actions[0]?.meta?.member as { caseId?: string; attentionId?: string; reply?: string } | undefined
+    if (m) handedOff(m, env.ORGANIZER_NAME)
+  })
+  startNotifier({ caseOf: (id) => (id ? getCase(id) : undefined) })
+  // Anything reachable through the tunnel needs a token; this laptop stays trusted.
+  if (env.TUNNEL) ensureAdminToken()
 
   const onMessage = async (msg: Parameters<typeof ingest>[0]) => {
     // Telegram DMs: verify membership through Swytchcode; the answer feeds the DM policy.
@@ -114,8 +132,8 @@ async function main(): Promise<void> {
   const app = createApp({
     store,
     webRoot: path.resolve('dist', 'web'),
-    adminToken: env.ADMIN_TOKEN,
-    onConsole: (text) => runConsole(text),
+    adminToken: () => adminToken(),
+    onConsole: (text, about) => runConsole(text, { about }),
     onApproval: (id, decision, by) => decide(id, decision, by),
     onResolveAttention: async (id) => resolveAttention(id),
     onDigest: () => sendDigest({ trigger: 'manual' }),
@@ -126,12 +144,55 @@ async function main(): Promise<void> {
     audit: async () => ({ network: await swyAuditNetwork(60).catch(() => []), policy: await swyAuditPolicy(60).catch(() => []) }),
     scenarios: () => listScenarios(),
     onDemo: (action, body) => demo(action, body, store),
+    onCaseResolve: async (id, by) => (id.startsWith('at_') ? resolveAttention(id) : resolveCase(id, by)) ?? { error: 'not found' },
+    onCaseReply: (id, text) => replyToMember(id, text, env.ORGANIZER_NAME),
+    onAnswerPending: async (id, text) => {
+      const p = getPending(id)
+      if (!p || p.status !== 'waiting') return { error: 'already answered' }
+      const by = env.ORGANIZER_NAME === 'the team' ? 'An organizer' : env.ORGANIZER_NAME
+      if (p.modsThreadTs) void postModsCard(`💬 ${by} answered from the Pulse app:\n${quote(text)}`, { threadTs: p.modsThreadTs })
+      void handleModReply(id, { userName: by, text }).catch((e) => bus.emit({ type: 'log', level: 'error', text: `learning loop: ${(e as Error).message}` }))
+      return { ok: true }
+    },
+    pair: async () => {
+      const token = ensureAdminToken()
+      const n = notifyState()
+      const lan = Object.values(os.networkInterfaces())
+        .flat()
+        .find((i) => i && i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254'))?.address
+      return {
+        tunnel: n.tunnel,
+        publicUrl: n.publicUrl,
+        url: n.publicUrl ? `${n.publicUrl}/m/?token=${token}` : undefined,
+        lanUrl: lan ? `http://${lan}:${server.port}/m/?token=${token}` : undefined,
+        devices: n.devices,
+      }
+    },
+    push: {
+      key: vapidPublicKey,
+      subscribe: async (sub, ua) => addDevice(sub as PushSubscription, ua),
+      unsubscribe: async (endpoint) => removeDevice(endpoint),
+      test: async () => ({
+        sent: await pushToDevices({ id: `test_${Date.now()}`, kind: 'member', title: 'Pulse is connected', body: 'Anything that needs you will show up here.', urgent: false, at: Date.now() }),
+      }),
+    },
+    quick: async (id, action, sig) => {
+      if (!verifyItem(id, sig)) return { ok: false, error: 'bad signature', status: 403 }
+      if (id.startsWith('ap_') && (action === 'approve' || action === 'reject')) {
+        const a = await decide(id, action, 'Organizer (phone)')
+        return { ok: !!a, result: a?.status }
+      }
+      if (id.startsWith('at_') && action === 'resolve') return { ok: !!resolveAttention(id) }
+      return { ok: false, error: 'unsupported action', status: 400 }
+    },
   })
   const server = await startServer(app, env.PORT)
   log(`dashboard on http://localhost:${server.port} (mode ${env.MODE})`)
+  void startTunnel(server.port)
 
   const shutdown = async () => {
     log('shutting down')
+    stopTunnel()
     await Promise.allSettled([channels.telegram?.stop(), channels.slack?.stop()])
     batcher.stop()
     store.stop()

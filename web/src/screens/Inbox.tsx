@@ -3,6 +3,7 @@ import { Check, CircleCheck, HelpCircle, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { Approval, AttentionItem, PendingQuestion } from '@shared/events'
 import { ApprovalCard, DecisionButtons, KIND_LABEL, StatusBadge } from '../components/ApprovalCard'
+import { MoodLine, memberScores, moodWord } from '../components/Mood'
 import { api } from '../lib/api'
 import { timeAgo } from '../lib/format'
 import { useStore } from '../lib/store'
@@ -31,6 +32,7 @@ function ResolveButton({ id }: { id: string }) {
 }
 
 function EntryRow({ e, selected, onSelect }: { e: Entry; selected: boolean; onSelect: () => void }) {
+  const memberCase = useStore((s) => (e.type === 'member' && e.m.caseId ? s.cases.find((c) => c.id === e.m.caseId) : undefined))
   return (
     <li
       onClick={onSelect}
@@ -74,6 +76,15 @@ function EntryRow({ e, selected, onSelect }: { e: Entry; selected: boolean; onSe
                 <PlatformIcon platform={e.m.platform} className="size-3" />
                 {e.m.reason} · {timeAgo(e.m.ts)}
               </div>
+              {memberCase && (
+                <div className="mt-2 flex items-center gap-2.5 text-[12px] text-fg-3" title="Mood per message, oldest → newest">
+                  <MoodLine scores={memberScores(memberCase)} width={96} />
+                  <span className="min-w-0 truncate">
+                    {moodWord(memberCase.mood)} · {memberCase.topic}
+                    {memberCase.pulseReplies ? ` · Pulse answered ${memberCase.pulseReplies}×` : ''}
+                  </span>
+                </div>
+              )}
             </>
           )}
           {e.type === 'question' && (

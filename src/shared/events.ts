@@ -32,6 +32,7 @@ export type RunOrigin = 'community' | 'mod' | 'console' | 'sweep' | 'digest' | '
 export type StepKind =
   | 'context'
   | 'think'
+  | 'mood'
   | 'search'
   | 'reply'
   | 'mods'
@@ -211,6 +212,80 @@ export interface AttentionItem {
   status: 'open' | 'resolved'
   ts: number
   simulated?: boolean
+  /** the member's case (mood tracking) this escalation belongs to */
+  caseId?: string
+  /** the #mods card, so follow-ups land in the same thread */
+  modsTs?: string
+}
+
+// ── member mood + cases ─────────────────────────────────────────────────────
+
+export type Emotion = 'happy' | 'grateful' | 'calm' | 'confused' | 'anxious' | 'annoyed' | 'angry' | 'desperate'
+
+export interface MoodPoint {
+  ts: number
+  /** -1 (very upset) … +1 (delighted) */
+  score: number
+  emotion?: Emotion
+  by: 'member' | 'pulse' | 'organizer'
+  text: string
+  msgId?: string
+  /** how the score was read: the mood model, or the keyword fallback */
+  via?: 'llm' | 'keywords'
+}
+
+/**
+ * A member with a problem, followed until it is solved. Opened when someone is
+ * stuck or upset; each message moves their mood; Pulse brings in a human when
+ * the trend says so; it closes when the member is happy again or a mod closes it.
+ */
+export interface MemberCase {
+  id: string
+  platform: Platform
+  chatId: string
+  userId: string
+  userName: string
+  status: 'open' | 'escalated' | 'resolved'
+  /** what the problem is, in a few words */
+  topic: string
+  /** smoothed mood, -1 … +1 */
+  mood: number
+  points: MoodPoint[]
+  /** member messages about the problem */
+  asks: number
+  pulseReplies: number
+  humanReplies: number
+  /** they asked for a person at some point */
+  askedForHuman?: boolean
+  openedAt: number
+  updatedAt: number
+  lastMemberAt: number
+  lastReplyAt?: number
+  lastMsgId?: string
+  threadTs?: string
+  escalatedAt?: number
+  escalation?: { reason: string; attentionId?: string; modsTs?: string }
+  resolvedAt?: number
+  /** 'member' (they said it works), 'timeout', or the organizer's name */
+  resolvedBy?: string
+  resolution?: string
+  simulated?: boolean
+}
+
+// ── organizer notifications (email + phone push) ───────────────────────────
+
+export interface NotifyState {
+  /** "needs you" emails go to this address (via Swytchcode → Resend) */
+  emailTo?: string
+  email: boolean
+  /** phones subscribed to push */
+  devices: number
+  /** items waiting for the next bundled email */
+  queued: number
+  lastEmailAt?: number
+  /** public HTTPS address (Cloudflare tunnel), used in email links and the phone QR */
+  publicUrl?: string
+  tunnel: 'off' | 'starting' | 'up' | 'down'
 }
 
 export interface PendingQuestion {
@@ -270,6 +345,8 @@ export type GtEvent =
   | { type: 'selftest'; ts: number; results: SelfTestResult[] }
   | { type: 'digest'; ts: number; status: 'sent' | 'skipped' | 'error'; detail: string; runId?: string }
   | { type: 'scenario'; ts: number; state: ScenarioState }
+  | { type: 'case'; ts: number; item: MemberCase }
+  | { type: 'notify'; ts: number; state: NotifyState; sent?: { channel: 'email' | 'push'; ok: boolean; detail: string } }
   | { type: 'log'; ts: number; level: 'info' | 'warn' | 'error'; text: string }
 
 /** Monotonic id attached by the server so clients can resume (poll transport). */
@@ -300,6 +377,8 @@ export interface StateSnapshot {
   approvals: Approval[]
   attention: AttentionItem[]
   pending: PendingQuestion[]
+  cases: MemberCase[]
+  notify: NotifyState
   helpers: Helper[]
   guardrails: Array<Extract<GtEvent, { type: 'guardrail' }>>
   selftest: SelfTestResult[]

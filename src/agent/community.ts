@@ -5,10 +5,10 @@ import { channels, post } from '../core/channels.js'
 import { requestApproval, knowledgeAction } from '../core/approvals.js'
 import { modsAvailable, platformLabel, postModsCard, quote } from '../core/mods.js'
 import type { Run } from '../core/runs.js'
-import { createPending, openAttention, savePending } from '../core/state-docs.js'
+import { createPending, openAttention, savePending, updateAttention } from '../core/state-docs.js'
 import { writeHistory, type Message } from '../conversation/memory.js'
 import { getEntry, markUsed, searchKnowledge, type KbHit } from '../kb/knowledge.js'
-import type { InboundMessage, RunOutcome } from '../shared/events.js'
+import type { InboundMessage, MemberCase, RunOutcome } from '../shared/events.js'
 import { markAnswered } from '../store/repo.js'
 import { redact } from '../swy/redact.js'
 import { clampReply } from './format.js'
@@ -24,7 +24,12 @@ const MAX_STEPS = 5
 
 export interface MemberSignal {
   msgId: string
+  /** 0 … 1, derived from the mood reading */
   frustration: number
+  /** this message's mood reading (mood model, or keywords as fallback) */
+  mood?: { score: number; emotion: string; wantsHuman: boolean }
+  /** the member's open problem, followed until it's solved */
+  case?: { topic: string; trend: number[]; status: MemberCase['status']; pulseReplies: number }
   repeatOf?: { text: string; userName: string; answered: boolean }
   asksToday: number
   isNew: boolean
@@ -74,7 +79,11 @@ export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hi
       m.joined ? 'JOINED' : '',
       m.addressed ? 'addressed to Pulse' : '',
       s?.isNew && !m.joined ? 'first message here' : '',
-      s && s.frustration >= 0.3 ? `frustration≈${s.frustration.toFixed(1)}` : '',
+      s?.mood && (s.mood.score <= -0.2 || s.mood.score >= 0.4) ? `mood ${s.mood.score.toFixed(1)} ${s.mood.emotion}` : '',
+      s?.mood?.wantsHuman ? 'ASKS FOR A PERSON' : '',
+      s?.case
+        ? `open problem: "${s.case.topic.slice(0, 60)}", mood ${s.case.trend.map((x) => x.toFixed(1)).join('→')}${s.case.pulseReplies ? `, Pulse answered ${s.case.pulseReplies}× already` : ''}${s.case.status === 'escalated' ? ', organizers already flagged' : ''}`
+        : '',
       s && s.asksToday >= 2 ? `asked ${s.asksToday}× today` : '',
       s?.directedAt && !s.answersQuestionOf ? `aimed at ${s.directedAt}, not Pulse` : '',
       s?.answersQuestionOf ? `looks like an ANSWER to ${s.answersQuestionOf}'s question (consider propose_knowledge)` : '',
@@ -261,10 +270,11 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
         const step = run.steps.begin('flag', `Flag ${m.userName} for the organizers`, reason)
         const item = openAttention({ kind, platform, chatId, msgId: m.msgId, userId: m.userId, userName: m.userName, text: m.text, reason, simulated })
         if (modsAvailable()) {
-          await postModsCard(
+          const card = await postModsCard(
             `${kind === 'frustrated' ? '😤' : kind === 'ignored' ? '⏳' : '🙋'} **${m.userName} needs a human**  ·  ${platformLabel(platform)}\n${quote(m.text)}\n_${reason}_`,
             { runId: run.id },
           )
+          if (card.ts) updateAttention(item.id, { modsTs: card.ts })
           step.tools(['slack.chat.postmessage.create'])
         }
         step.ok(`organizers notified (${kind})`, { attention: item.id })

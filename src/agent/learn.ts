@@ -6,6 +6,7 @@ import { post } from '../core/channels.js'
 import { platformLabel, postModsCard } from '../core/mods.js'
 import { startRun } from '../core/runs.js'
 import { getPending, savePending, waitingQuestions } from '../core/state-docs.js'
+import { activeCases, noteReply } from '../core/cases.js'
 import { addKnowledge } from '../kb/knowledge.js'
 import type { KbItem, PendingQuestion, Platform } from '../shared/events.js'
 import { Bm25Index } from '../store/bm25.js'
@@ -36,6 +37,9 @@ async function relay(p: PendingQuestion, text: string, runId: string): Promise<b
     const key = chatKey(p.platform, p.chatId)
     writeHistory(p.simulated ? `sim:${key}` : key, { sender: 'Pulse', text, ts: Date.now() })
     markAnswered(p.platform, p.chatId, [p.msgId], 'human', runId)
+    // An organizer's answer counts toward the member's open problem, if they have one.
+    const c = activeCases().find((x) => x.platform === p.platform && x.userName === p.userName && !!x.simulated === !!p.simulated)
+    if (c) noteReply(c, 'organizer', text)
   }
   return res.ok
 }

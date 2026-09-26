@@ -8,6 +8,7 @@ import {
   Eye,
   Flag,
   Hand,
+  HeartPulse,
   Hourglass,
   LoaderCircle,
   Mail,
@@ -32,6 +33,7 @@ import { JsonBlock, ToolChip } from '../ui/primitives'
 const ICON: Record<StepKind, ComponentType<{ className?: string }>> = {
   context: Eye,
   think: Sparkles,
+  mood: HeartPulse,
   search: Search,
   reply: MessageSquareReply,
   mods: Users,

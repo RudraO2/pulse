@@ -15,8 +15,10 @@ import { modsAvailable, postModsCard } from '../core/mods.js'
 import { startRun, type Run } from '../core/runs.js'
 import { communityStats } from '../core/stats.js'
 import { openAttentionItems, waitingQuestions } from '../core/state-docs.js'
+import { caseOf, fmtMood, getCase } from '../core/cases.js'
+import { getDoc } from '../store/repo.js'
 import { getEntry, searchKnowledge } from '../kb/knowledge.js'
-import type { ApprovalAction, Platform } from '../shared/events.js'
+import type { ApprovalAction, AttentionItem, MemberCase, Platform } from '../shared/events.js'
 import { Bm25Index } from '../store/bm25.js'
 import { recentMessages, type StoredMessage } from '../store/repo.js'
 import { swyDiscover, swyExec, swyInfo, swyListTooling } from '../swy/exec.js'
@@ -77,7 +79,53 @@ function mdToHtml(md: string): string {
   }
 }
 
-export function consoleTools(run: Run) {
+/** A Console request made from one member's card (phone app / Inbox). */
+export interface ConsoleAbout {
+  kind: 'member'
+  /** attention item or case id */
+  id: string
+}
+
+interface MemberTarget {
+  platform: Platform
+  chatId: string
+  userId: string
+  userName: string
+  replyTo?: string
+  threadTs?: string
+  attentionId?: string
+  case?: MemberCase
+  context: string
+}
+
+function memberTarget(about: ConsoleAbout): MemberTarget | undefined {
+  const item = about.id.startsWith('at_') ? getDoc<AttentionItem>('attention', about.id) : undefined
+  const c = getCase(item?.caseId ?? about.id) ?? (item ? caseOf(item.platform, item.userId, !!item.simulated) : undefined)
+  const t = item ?? c
+  if (!t) return undefined
+  const said = c ? c.points.filter((p) => p.by === 'member').slice(-5).map((p) => `- "${p.text}" (mood ${fmtMood(p.score)}${p.emotion ? `, ${p.emotion}` : ''})`) : [`- "${item!.text}"`]
+  const replies = c ? c.points.filter((p) => p.by !== 'member').slice(-3).map((p) => `- ${p.by === 'pulse' ? 'Pulse' : 'Organizer'} replied: "${p.text.slice(0, 200)}"`) : []
+  return {
+    platform: t.platform,
+    chatId: t.chatId,
+    userId: t.userId,
+    userName: t.userName,
+    replyTo: c?.lastMsgId ?? item?.msgId,
+    threadTs: c?.threadTs,
+    attentionId: item?.id ?? c?.escalation?.attentionId,
+    case: c,
+    context: [
+      `THIS REQUEST IS ABOUT ONE MEMBER: ${t.userName} (${t.platform === 'telegram' ? 'Telegram' : 'Slack'}).`,
+      c ? `Their problem: ${c.topic}. Mood now ${fmtMood(c.mood)}. ${c.escalation?.reason ? `Flagged because: ${c.escalation.reason}.` : ''}` : `Flagged because: ${item!.reason}.`,
+      `What they said (oldest first):\n${said.join('\n')}`,
+      replies.length ? `Replies so far:\n${replies.join('\n')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n'),
+  }
+}
+
+export function consoleTools(run: Run, member?: MemberTarget) {
   const approvals: string[] = []
   const approve = async (input: Omit<Parameters<typeof requestApproval>[0], 'requestedBy' | 'runId'>) => {
     const a = await requestApproval({ ...input, runId: run.id, requestedBy: 'Organizer via Console', simulated: run.simulated })
@@ -226,6 +274,29 @@ export function consoleTools(run: Run) {
       },
     }),
 
+    ...(member
+      ? {
+          reply_to_member: tool({
+            description: `Prepare a reply to ${member.userName} in their chat thread (needs approval). Write it as the organizer would: warm, specific, 1–3 sentences, first name. It is signed by the organizer automatically.`,
+            inputSchema: z.object({ text: z.string().describe('the reply the member will see') }),
+            execute: async ({ text }) => {
+              const step = run.steps.begin('preview', `Prepare a reply to ${member.userName.split(' ')[0]} (dry-run)`, text.slice(0, 120))
+              const body = `${text.trim()}\n\n_— ${env.ORGANIZER_NAME}_`
+              const action = postAction(member.platform, member.chatId, body, `Reply to ${member.userName} in ${member.platform === 'telegram' ? 'Telegram' : 'Slack'}`, {
+                threadTs: member.platform === 'slack' ? member.threadTs ?? member.replyTo : undefined,
+              })
+              action.meta = { ...action.meta, replyToId: member.platform === 'telegram' ? member.replyTo : undefined, member: { userId: member.userId, caseId: member.case?.id, attentionId: member.attentionId, reply: text } }
+              step.tools([action.tool])
+              const a = await approve({ kind: 'post', title: `Reply to ${member.userName}`, summary: body, actions: [action] })
+              const blocked = a.actions.find((x) => x.blocked)
+              if (blocked) step.blocked(`Swytchcode blocked the reply in dry-run: ${blocked.blocked}`, { approval: a.id })
+              else step.waiting(`approval ${a.id} waiting`, { approval: a.id, actions: previewSummary(a.actions) })
+              return { approval_id: a.id, status: 'waiting for organizer approval', previews: previewSummary(a.actions) }
+            },
+          }),
+        }
+      : {}),
+
     post_to_mods: tool({
       description: 'Post an internal note to the organizers in Slack #mods (no approval needed; internal channel).',
       inputSchema: z.object({ text: z.string() }),
@@ -322,20 +393,21 @@ export function consoleTools(run: Run) {
   return { tools, approvals }
 }
 
-export async function runConsole(text: string, opts: { simulated?: boolean } = {}): Promise<{ runId: string }> {
-  const run = startRun('console', text, { userName: 'Organizer', simulated: opts.simulated })
-  void executeConsole(run, text)
+export async function runConsole(text: string, opts: { simulated?: boolean; about?: ConsoleAbout } = {}): Promise<{ runId: string }> {
+  const member = opts.about ? memberTarget(opts.about) : undefined
+  const run = startRun('console', member ? `${member.userName.split(' ')[0]}: ${text}` : text, { userName: 'Organizer', simulated: opts.simulated ?? member?.case?.simulated })
+  void executeConsole(run, text, member)
   return { runId: run.id }
 }
 
-async function executeConsole(run: Run, text: string): Promise<void> {
+async function executeConsole(run: Run, text: string, member?: MemberTarget): Promise<void> {
   const model = consoleModel()
   if (!model) {
     run.steps.record('error', 'No model configured', 'error', 'Set ANTHROPIC_API_KEY or GROQ_API_KEY')
     run.end('failed', { summary: 'no model configured' })
     return
   }
-  const { tools, approvals } = consoleTools(run)
+  const { tools, approvals } = consoleTools(run, member)
   const surfaces = communityTargets(run.simulated).map((t) => t.label)
   if (modsAvailable()) surfaces.push('Slack #mods (organizers)')
   const now = new Date().toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
@@ -344,8 +416,8 @@ async function executeConsole(run: Run, text: string): Promise<void> {
   try {
     const result = await generateText({
       model,
-      instructions: consoleInstructions({ now, channels: surfaces.join(', ') || 'none connected' }),
-      prompt: text,
+      instructions: consoleInstructions({ now, channels: surfaces.join(', ') || 'none connected', member: !!member }),
+      prompt: member ? `${member.context}\n\nORGANIZER'S REQUEST: ${text}` : text,
       tools,
       maxRetries: 1,
       providerOptions: { groq: { reasoningEffort: 'medium' }, anthropic: { cacheControl: { type: 'ephemeral' } } },
@@ -355,7 +427,7 @@ async function executeConsole(run: Run, text: string): Promise<void> {
         const said = step.text?.trim()
         if (first) {
           first = false
-          think.ok(said ? said.slice(0, 280) : `plan: ${step.toolCalls?.map((c) => c.toolName).join(' → ') || 'answer directly'}`, { model: step.response?.modelId })
+          think.ok(said ? said.slice(0, 280) : `plan: ${step.toolCalls?.map((c) => c?.toolName).join(' → ') || 'answer directly'}`, { model: step.response?.modelId })
         } else if (said && step.toolCalls?.length) {
           run.steps.record('think', 'Reasoning', 'ok', said.slice(0, 280))
         }

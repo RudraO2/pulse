@@ -26,8 +26,14 @@ const EVENT_TYPES: GtEvent['type'][] = [
   'selftest',
   'digest',
   'scenario',
+  'case',
+  'notify',
   'log',
 ]
+
+/** The admin token (phone app / tunnel): reads need it too when you're not on the Pulse laptop. */
+const token = () => localStorage.getItem('pulse.token') ?? ''
+const withToken = (url: string) => (token() ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token())}` : url)
 
 export class LiveTransport {
   private es: EventSource | null = null
@@ -58,7 +64,11 @@ export class LiveTransport {
 
   async hydrate(): Promise<boolean> {
     try {
-      const res = await fetch(`${this.base}/api/state`, { cache: 'no-store' })
+      const res = await fetch(withToken(`${this.base}/api/state`), { cache: 'no-store' })
+      if (res.status === 401) {
+        store.setConnection('locked')
+        return false
+      }
       if (!res.ok) return false
       const ct = res.headers.get('content-type') ?? ''
       if (!ct.includes('json')) return false
@@ -83,7 +93,7 @@ export class LiveTransport {
     if (this.stopped || this.polling) return
     store.setConnection('connecting')
     const since = store.get().seq
-    const es = new EventSource(`${this.base}/api/events?since=${since}`)
+    const es = new EventSource(withToken(`${this.base}/api/events?since=${since}`))
     this.es = es
 
     this.helloTimer = setTimeout(() => {
@@ -123,7 +133,7 @@ export class LiveTransport {
       this.pollAbort = new AbortController()
       try {
         const since = store.get().seq
-        const res = await fetch(`${this.base}/api/events/poll?since=${since}`, {
+        const res = await fetch(withToken(`${this.base}/api/events/poll?since=${since}`), {
           cache: 'no-store',
           signal: this.pollAbort.signal,
         })
