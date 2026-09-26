@@ -9,7 +9,7 @@ import type { Run } from '../core/runs.js'
 import { createPending, openAttention, savePending, updateAttention } from '../core/state-docs.js'
 import { writeHistory, type Message } from '../conversation/memory.js'
 import { getEntry, markUsed, searchKnowledge, type KbHit } from '../kb/knowledge.js'
-import { guideFor, guideOutline, searchGuide, type GuideHit } from '../kb/group-docs.js'
+import { guideFor, guideNow, guideOutline, searchGuide, type GuideHit } from '../kb/group-docs.js'
 import type { InboundMessage, MemberCase, RunOutcome } from '../shared/events.js'
 import { markAnswered } from '../store/repo.js'
 import { redact } from '../swy/redact.js'
@@ -71,15 +71,15 @@ function knowledgeBlock(hits: KbHit[]): string {
     .join('\n')}`
 }
 
-function guideBlock(name: string, hits: GuideHit[], outline: string[]): string {
-  const toc = outline.length ? `\nAll sections: ${outline.join(' | ')}` : ''
+function guideBlock(name: string, hits: GuideHit[], outline: string[], now?: string): string {
+  const toc = `${outline.length ? `\nAll sections: ${outline.join(' | ')}` : ''}${now ? `\n\n${now}` : ''}`
   if (!hits.length) return `GUIDE "${name}": (no section matches these words; try search_knowledge with other words)${toc}`
   return `GUIDE "${name}" (official for this chat, best matching sections):\n${hits
     .map((h) => `§ ${h.section.title}\n${h.section.text.slice(0, 1400)}`)
     .join('\n\n')}${toc}`
 }
 
-export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hits: KbHit[], guide?: { name: string; hits: GuideHit[]; outline: string[] }): string {
+export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hits: KbHit[], guide?: { name: string; hits: GuideHit[]; outline: string[]; now?: string }): string {
   const hist = input.history
     .slice(-30, -input.batch.length || undefined)
     .map((m) => `${m.ts ? `${fmtTime(m.ts)} ` : ''}${m.sender}: ${redact(m.text).slice(0, 300)}`)
@@ -103,7 +103,7 @@ export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hi
     return `[${m.msgId}] ${m.userName}${tags.length ? ` {${tags.join('; ')}}` : ''}: ${redact(m.text).slice(0, 800)}`
   })
   return [
-    guide ? guideBlock(guide.name, guide.hits, guide.outline) : '',
+    guide ? guideBlock(guide.name, guide.hits, guide.outline, guide.now) : '',
     knowledgeBlock(hits),
     input.waiting.length ? `ALREADY WAITING ON ORGANIZERS (don't ask again): ${input.waiting.map((w) => `"${w.slice(0, 80)}"`).join(', ')}` : '',
     hist.length ? `RECENT CONVERSATION (oldest first):\n${hist.join('\n')}` : 'RECENT CONVERSATION: (none)',
@@ -126,7 +126,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
   const hits = searchKnowledge(query, 5)
   // A guide attached to this chat (e.g. the participant guide in the event group) is its first source.
   const guideInfo = guideFor(chatId)
-  const guide = guideInfo ? { name: guideInfo.name, hits: searchGuide(chatId, query, 3), outline: guideOutline(chatId) } : undefined
+  const guide = guideInfo ? { name: guideInfo.name, hits: searchGuide(chatId, query, 3), outline: guideOutline(chatId), now: guideNow(chatId) } : undefined
   run.steps.record(
     'context',
     'Read the conversation',

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { Bm25Index } from '../store/bm25.js'
 import { kvGetJson, kvSetJson } from '../store/repo.js'
+import { describeNow, parseSchedule, type Slot } from './timeline.js'
 
 // A guide attached to one chat (e.g. the event's participant guide for the
 // event's WhatsApp group). Pulse answers that chat from the guide first.
@@ -25,6 +26,8 @@ interface Loaded {
   name: string
   sections: GuideSection[]
   index: Bm25Index<GuideSection>
+  /** the guide's schedule table, if it has one */
+  slots: Slot[]
 }
 
 const KEY = 'chat.guides'
@@ -80,11 +83,12 @@ function load(file: string): Loaded | undefined {
   const { mtimeMs } = statSync(file)
   const hit = cache.get(file)
   if (hit && hit.mtimeMs === mtimeMs) return hit
-  const sections = splitGuide(readFileSync(file, 'utf8'))
+  const md = readFileSync(file, 'utf8')
+  const sections = splitGuide(md)
   // Titles count twice: "deadline" should find the section called Important Deadline.
   const index = new Bm25Index<GuideSection>((s) => glue(`${s.title} ${s.title} ${s.text}`))
   sections.forEach((s) => index.add(s))
-  const loaded = { path: file, mtimeMs, name: path.basename(file).replace(/\.[^.]+$/, ''), sections, index }
+  const loaded = { path: file, mtimeMs, name: path.basename(file).replace(/\.[^.]+$/, ''), sections, index, slots: parseSchedule(md) }
   cache.set(file, loaded)
   return loaded
 }
@@ -124,6 +128,13 @@ export function guideOutline(chatId: string): string[] {
   const file = guides()[chatId]
   const g = file ? load(file) : undefined
   return g ? [...new Set(g.sections.map((s) => s.title))] : []
+}
+
+/** What's done, on and next right now, from the guide's schedule (undefined if it has none). */
+export function guideNow(chatId: string, now = new Date()): string | undefined {
+  const file = guides()[chatId]
+  const g = file ? load(file) : undefined
+  return g ? describeNow(g.slots, now) : undefined
 }
 
 /** All guides by chat, for the dashboard. */
