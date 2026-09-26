@@ -9,7 +9,7 @@ import type { Run } from '../core/runs.js'
 import { createPending, openAttention, savePending, updateAttention } from '../core/state-docs.js'
 import { writeHistory, type Message } from '../conversation/memory.js'
 import { getEntry, markUsed, searchKnowledge, type KbHit } from '../kb/knowledge.js'
-import { guideFor, guideNow, guideOutline, searchGuide, type GuideHit } from '../kb/group-docs.js'
+import { eventNow, guideFor, guideNow, guideOutline, searchGuide, type GuideHit } from '../kb/group-docs.js'
 import type { InboundMessage, MemberCase, RunOutcome } from '../shared/events.js'
 import { markAnswered } from '../store/repo.js'
 import { redact } from '../swy/redact.js'
@@ -79,7 +79,7 @@ function guideBlock(name: string, hits: GuideHit[], outline: string[], now?: str
     .join('\n\n')}${toc}`
 }
 
-export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hits: KbHit[], guide?: { name: string; hits: GuideHit[]; outline: string[]; now?: string }): string {
+export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hits: KbHit[], guide?: { name: string; hits: GuideHit[]; outline: string[]; now?: string }, timeline?: string): string {
   const hist = input.history
     .slice(-30, -input.batch.length || undefined)
     .map((m) => `${m.ts ? `${fmtTime(m.ts)} ` : ''}${m.sender}: ${redact(m.text).slice(0, 300)}`)
@@ -103,7 +103,7 @@ export function buildContext(input: Omit<CommunityRunInput, 'run' | 'model'>, hi
     return `[${m.msgId}] ${m.userName}${tags.length ? ` {${tags.join('; ')}}` : ''}: ${redact(m.text).slice(0, 800)}`
   })
   return [
-    guide ? guideBlock(guide.name, guide.hits, guide.outline, guide.now) : '',
+    guide ? guideBlock(guide.name, guide.hits, guide.outline, guide.now) : timeline ?? '',
     knowledgeBlock(hits),
     input.waiting.length ? `ALREADY WAITING ON ORGANIZERS (don't ask again): ${input.waiting.map((w) => `"${w.slice(0, 80)}"`).join(', ')}` : '',
     hist.length ? `RECENT CONVERSATION (oldest first):\n${hist.join('\n')}` : 'RECENT CONVERSATION: (none)',
@@ -400,7 +400,8 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
     await generateText({
       model: input.model,
       instructions: communityInstructions({ platform: platformLabel(platform), chatTitle: target.chatTitle, now, guide: guide?.name }),
-      prompt: buildContext(input, hits, guide),
+      // Chats without a guide still get the event's live timeline (what's done, on, next).
+      prompt: buildContext(input, hits, guide, guide ? undefined : eventNow()),
       tools,
       toolChoice: 'required',
       maxRetries: 0,

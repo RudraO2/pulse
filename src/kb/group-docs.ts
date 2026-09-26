@@ -137,6 +137,15 @@ export function guideNow(chatId: string, now = new Date()): string | undefined {
   return g ? describeNow(g.slots, now) : undefined
 }
 
+/** The event's timeline for any chat: the first attached guide that has a schedule. */
+export function eventNow(now = new Date()): string | undefined {
+  for (const file of new Set(Object.values(guides()))) {
+    const g = load(file)
+    if (g?.slots.length) return describeNow(g.slots, now)
+  }
+  return undefined
+}
+
 /** All guides by chat, for the dashboard. */
 export function guideNames(): Record<string, string> {
   const out: Record<string, string> = {}
