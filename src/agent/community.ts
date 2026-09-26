@@ -394,7 +394,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
   const finalOutcome = (): RunOutcome => (flagged ? 'escalated' : proposed && (!outcome || outcome === 'silent') ? 'proposed' : outcome ?? 'silent')
 
   let steps = 0
-  const now = new Date().toLocaleString('en-IN', { weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })
+  const now = new Date().toLocaleString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })
   const think = run.steps.begin('think', 'Decide what the community needs')
   try {
     await generateText({

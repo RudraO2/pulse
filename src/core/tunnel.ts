@@ -13,6 +13,10 @@ import { setPublicUrl } from './notify.js'
 // and its push subscription are tied to it. So cloudflared runs detached and
 // outlives Pulse: a restart of Pulse reuses the same tunnel (same address).
 // It only changes if cloudflared dies or the laptop reboots.
+//
+// Always on: a watchdog checks the process every 20 s and the public address
+// every minute; if either is gone (3 failed checks in a row for the address),
+// it opens a new tunnel, retrying with backoff forever.
 
 const LOG = path.resolve('data', 'cloudflared.log')
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
@@ -58,22 +62,57 @@ async function reachable(url: string): Promise<boolean> {
   }
 }
 
+const CHECK_MS = 20_000
+const REACH_EVERY = 3 // ticks: the public address is checked every minute
+const MAX_MISSES = 3
+
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+/** Open a new tunnel after a delay that grows with each failed attempt (5 s … 5 min). */
+function retry(reason: string): void {
+  if (watchdog) clearInterval(watchdog)
+  watchdog = undefined
+  if (retryTimer) return
+  setPublicUrl(undefined, 'down')
+  const delay = Math.min(5_000 * 2 ** restarts, 300_000)
+  restarts++
+  bus.emit({ type: 'log', level: 'warn', text: `tunnel: ${reason}, opening a new one in ${Math.round(delay / 1000)} s (the phone needs the new QR)` })
+  retryTimer = setTimeout(() => {
+    retryTimer = undefined
+    void spawnTunnel(port)
+  }, delay)
+  retryTimer.unref?.()
+}
+
 function up(url: string, pid: number): void {
   restarts = 0
   kvSetJson('tunnel', { pid, url })
   setPublicUrl(url, 'up')
   console.log(`[Pulse] phone app: ${url}/m`)
   bus.emit({ type: 'log', level: 'info', text: `tunnel up: ${url} (phone app at /m)` })
-  // If cloudflared dies, open a new one (the address will change).
   if (watchdog) clearInterval(watchdog)
+  let tick = 0
+  let misses = 0
+  let checking = false
   watchdog = setInterval(() => {
-    if (alive(pid)) return
-    clearInterval(watchdog)
-    watchdog = undefined
-    setPublicUrl(undefined, 'down')
-    bus.emit({ type: 'log', level: 'warn', text: 'tunnel stopped, opening a new one (the phone needs the new QR)' })
-    if (restarts++ < 5) void spawnTunnel(port)
-  }, 15_000)
+    if (!alive(pid)) return retry('cloudflared stopped')
+    if (++tick % REACH_EVERY || checking) return
+    checking = true
+    void reachable(url)
+      .then((ok) => {
+        misses = ok ? 0 : misses + 1
+        if (misses < MAX_MISSES) return
+        try {
+          process.kill(pid)
+        } catch {
+          /* already gone */
+        }
+        retry(`${url} stopped answering`)
+      })
+      .finally(() => {
+        checking = false
+      })
+  }, CHECK_MS)
   watchdog.unref?.()
 }
 
@@ -91,15 +130,19 @@ async function spawnTunnel(p: number): Promise<void> {
   proc.on('error', (e) => bus.emit({ type: 'log', level: 'warn', text: `tunnel: could not start cloudflared (${e.message}). Install it or set CLOUDFLARED_BIN.` }))
   proc.unref()
   const pid = proc.pid
-  if (!pid) return
+  if (!pid) return retry('cloudflared did not start')
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 500))
     const m = fs.existsSync(LOG) ? fs.readFileSync(LOG, 'utf-8').match(URL_RE) : null
     if (m) return up(m[0], pid)
     if (!alive(pid)) break
   }
-  setPublicUrl(undefined, 'down')
-  bus.emit({ type: 'log', level: 'warn', text: 'tunnel: cloudflared did not report an address' })
+  try {
+    process.kill(pid)
+  } catch {
+    /* already gone */
+  }
+  retry('cloudflared did not report an address')
 }
 
 export async function startTunnel(p: number): Promise<void> {
@@ -123,4 +166,6 @@ export async function startTunnel(p: number): Promise<void> {
 export function stopTunnel(): void {
   if (watchdog) clearInterval(watchdog)
   watchdog = undefined
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = undefined
 }
