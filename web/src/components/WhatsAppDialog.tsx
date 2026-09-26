@@ -10,7 +10,7 @@ import { Badge, Button, PlatformIcon } from '../ui/primitives'
 // the WhatsApp bot does: one master switch, a switch per group, and per chat
 // Auto (Pulse replies on its own) or Approve (every reply waits for you).
 
-function Switch({ on, onChange, label, busy, tone = 'green' }: { on: boolean; onChange: (v: boolean) => void; label: string; busy?: boolean; tone?: 'green' | 'amber' }) {
+export function Switch({ on, onChange, label, busy, tone = 'green' }: { on: boolean; onChange: (v: boolean) => void; label: string; busy?: boolean; tone?: 'green' | 'amber' }) {
   return (
     <button
       role="switch"
@@ -26,7 +26,7 @@ function Switch({ on, onChange, label, busy, tone = 'green' }: { on: boolean; on
 }
 
 /** Auto = no approval needed; Approve = each reply waits in the Inbox (and on your phone). */
-function ModePill({ auto, onChange, disabled }: { auto: boolean; onChange: (auto: boolean) => void; disabled?: boolean }) {
+export function ModePill({ auto, onChange, disabled }: { auto: boolean; onChange: (auto: boolean) => void; disabled?: boolean }) {
   const opt = (value: boolean, label: string, title: string) => (
     <button
       onClick={() => onChange(value)}

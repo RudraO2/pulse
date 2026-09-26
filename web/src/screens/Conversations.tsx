@@ -1,13 +1,15 @@
 import clsx from 'clsx'
-import { CornerDownRight, Maximize2, MessagesSquare, X } from 'lucide-react'
+import { Check, CornerDownRight, Hourglass, Maximize2, MessagesSquare, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { InboundMessage, Platform, RunSummary } from '@shared/events'
+import type { Approval, InboundMessage, Platform, RunSummary } from '@shared/events'
 import { OUTCOME_STYLE } from '../components/ActivityRow'
 import { openRun } from '../components/RunDrawer'
 import { RunTrace } from '../components/RunTrace'
 import { clock, mdInline, modelName, ms, OUTCOME_LABEL } from '../lib/format'
+import { api } from '../lib/api'
 import { useStore } from '../lib/store'
-import { Avatar, Badge, EmptyState, PageHeader, PlatformIcon, Segmented } from '../ui/primitives'
+import { ModePill, Switch } from '../components/WhatsAppDialog'
+import { Avatar, Badge, Button, EmptyState, PageHeader, PlatformIcon, Segmented } from '../ui/primitives'
 
 interface Channel {
   key: string
@@ -22,6 +24,52 @@ interface Channel {
 type Item =
   | { kind: 'in'; key: string; ts: number; msg: InboundMessage; run?: RunSummary }
   | { kind: 'out'; key: string; ts: number; text: string; runId?: string; thread: boolean; simulated?: boolean }
+  | { kind: 'draft'; key: string; ts: number; text: string; approval: Approval }
+
+const PLATFORM_ORDER: Record<string, number> = { telegram: 0, slack: 1, whatsapp: 2, web: 3 }
+const PLATFORM_NAME: Record<string, string> = { telegram: 'Telegram', slack: 'Slack', whatsapp: 'WhatsApp', web: 'Web' }
+
+/** Where a held reply would be posted (post approvals waiting for the organizer). */
+function draftTarget(a: Approval): { platform?: string; chatId?: string; text?: string } {
+  return (a.actions[0]?.meta ?? {}) as { platform?: string; chatId?: string; text?: string }
+}
+
+function DraftActions({ approval }: { approval: Approval }) {
+  const [busy, setBusy] = useState<'approve' | 'reject'>()
+  const act = (kind: 'approve' | 'reject') => {
+    setBusy(kind)
+    void (kind === 'approve' ? api.approve(approval.id) : api.reject(approval.id)).finally(() => setBusy(undefined))
+  }
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <Button size="sm" variant="go" icon={<Check className="size-3.5" />} loading={busy === 'approve'} disabled={!!busy} onClick={() => act('approve')}>
+        Send
+      </Button>
+      <Button size="sm" variant="ghost" loading={busy === 'reject'} disabled={!!busy} onClick={() => act('reject')}>
+        Discard
+      </Button>
+    </div>
+  )
+}
+
+/** A WhatsApp group's switches, right where its messages are. */
+function WhatsAppControls({ jid }: { jid: string }) {
+  const wa = useStore((s) => s.whatsapp)
+  const g = wa.groups.find((x) => x.jid === jid)
+  const [busy, setBusy] = useState(false)
+  if (!g) return null
+  const act = (patch: { enabled?: boolean; auto?: boolean }) => {
+    setBusy(true)
+    void api.waGroup(jid, patch).finally(() => setBusy(false))
+  }
+  return (
+    <div className="ml-auto flex items-center gap-2.5">
+      {wa.paused && <Badge tone="warn">Paused</Badge>}
+      {g.enabled && <ModePill auto={g.auto} disabled={busy} onChange={(auto) => act({ auto })} />}
+      <Switch on={g.enabled} busy={busy} label={`Pulse in ${g.name}`} onChange={(enabled) => act({ enabled })} />
+    </div>
+  )
+}
 
 const DECISION_LABEL: Partial<Record<string, string>> = {
   asked_mods: 'Asked the organizers',
@@ -98,6 +146,8 @@ export function ConversationsScreen() {
   const outgoing = useStore((s) => s.outgoing)
   const runs = useStore((s) => s.runs)
   const configured = useStore((s) => s.channels)
+  const wa = useStore((s) => s.whatsapp)
+  const approvals = useStore((s) => s.approvals)
   const [active, setActive] = useState<string | undefined>()
   const [selected, setSelected] = useState<{ key: string; runId: string } | undefined>()
   const end = useRef<HTMLDivElement>(null)
@@ -105,6 +155,9 @@ export function ConversationsScreen() {
   const channels = useMemo<Channel[]>(() => {
     const map = new Map<string, Channel>()
     for (const c of configured) map.set(`${c.platform}:${c.chatId}`, { key: `${c.platform}:${c.chatId}`, platform: c.platform, chatId: c.chatId, title: c.title, role: c.role, count: 0, last: 0 })
+    // WhatsApp groups show up as soon as Pulse is switched on in them, and leave when it is switched off.
+    const waOff = new Set(wa.groups.filter((g) => !g.enabled).map((g) => `whatsapp:${g.jid}`))
+    for (const g of wa.groups) if (g.enabled) map.set(`whatsapp:${g.jid}`, { key: `whatsapp:${g.jid}`, platform: 'whatsapp', chatId: g.jid, title: g.name, role: 'community', count: 0, last: 0 })
     const touch = (platform: Platform, chatId: string, ts: number, title?: string, dm?: string) => {
       const key = `${platform}:${chatId}`
       const c = map.get(key) ?? { key, platform, chatId, title: title ?? chatId, role: dm ? 'dm' : 'community', count: 0, last: 0 }
@@ -113,11 +166,11 @@ export function ConversationsScreen() {
       if (dm) c.title = `DM · ${dm}`
       map.set(key, c)
     }
-    for (const m of messages) if (scope === 'all' || !m.simulated) touch(m.platform, m.chatId, m.ts, m.chatTitle, m.chatType === 'dm' ? m.userName : undefined)
+    for (const m of messages) if ((scope === 'all' || !m.simulated) && !waOff.has(`${m.platform}:${m.chatId}`)) touch(m.platform, m.chatId, m.ts, m.chatTitle, m.chatType === 'dm' ? m.userName : undefined)
     for (const o of outgoing) if ((scope === 'all' || !o.simulated) && map.has(`${o.platform}:${o.chatId}`)) touch(o.platform, o.chatId, o.ts)
     const rank = { community: 0, dm: 1, mods: 2 }
-    return [...map.values()].sort((a, b) => rank[a.role] - rank[b.role] || b.last - a.last)
-  }, [messages, outgoing, configured, scope])
+    return [...map.values()].sort((a, b) => (PLATFORM_ORDER[a.platform] ?? 9) - (PLATFORM_ORDER[b.platform] ?? 9) || rank[a.role] - rank[b.role] || b.last - a.last)
+  }, [messages, outgoing, configured, scope, wa.groups])
 
   const current = channels.find((c) => c.key === active) ?? channels[0]
 
@@ -135,8 +188,16 @@ export function ConversationsScreen() {
       if (scope === 'real' && o.simulated) return
       list.push({ kind: 'out', key: `out-${o.msgId ?? i}-${o.ts}`, ts: o.ts, text: o.text, runId: o.runId, thread: !!o.threadTs, simulated: o.simulated })
     })
+    // Replies held for approval (WhatsApp chats on Approve) show where they would be posted.
+    for (const a of approvals) {
+      if (a.status !== 'pending' || a.kind !== 'post') continue
+      const t = draftTarget(a)
+      if (t.platform !== current.platform || t.chatId !== current.chatId || !t.text) continue
+      if (scope === 'real' && a.simulated) continue
+      list.push({ kind: 'draft', key: `draft-${a.id}`, ts: a.createdAt, text: t.text, approval: a })
+    }
     return list.sort((a, b) => a.ts - b.ts).slice(-150)
-  }, [current, messages, outgoing, runs, scope])
+  }, [current, messages, outgoing, runs, approvals, scope])
 
   // show each run's decision only on the last message of its batch
   const decisionAt = useMemo(() => {
@@ -176,7 +237,11 @@ export function ConversationsScreen() {
 
       <div className="card flex h-[calc(100vh-178px)] min-h-[480px] flex-col overflow-hidden md:flex-row">
         <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-line bg-subtle/60 p-2 md:w-[210px] md:flex-col md:overflow-y-auto md:border-r md:border-b-0 md:p-2.5" aria-label="Channels">
-          {channels.map((c) => (
+          {channels.map((c, i) => (
+            <div key={c.key} className="contents">
+            {channels[i - 1]?.platform !== c.platform && (
+              <div className={clsx('hidden px-2.5 pb-1 text-[11px] font-medium tracking-wide text-fg-4 uppercase md:block', i > 0 && 'mt-3')}>{PLATFORM_NAME[c.platform] ?? c.platform}</div>
+            )}
             <button
               key={c.key}
               onClick={() => {
@@ -192,6 +257,7 @@ export function ConversationsScreen() {
               </span>
               <span className="text-[11px] text-fg-4 tabular-nums">{c.count}</span>
             </button>
+            </div>
           ))}
           {!channels.length && <p className="px-2 text-[12px] text-fg-4">No channels connected yet.</p>}
         </nav>
@@ -203,11 +269,30 @@ export function ConversationsScreen() {
                 <PlatformIcon platform={current.platform} className="size-4" />
                 <span className="text-[14px] font-semibold text-fg">{current.title}</span>
                 {current.role === 'mods' && <Badge tone="warn">Private</Badge>}
+                {current.platform === 'whatsapp' && current.chatId.endsWith('@g.us') && <WhatsAppControls jid={current.chatId} />}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto py-3">
                 {items.length ? (
                   <ul>
                     {items.map((it, i) => {
+                      if (it.kind === 'draft') {
+                        return (
+                          <li key={it.key} className="relative grid animate-fade-in grid-cols-[30px_minmax(0,1fr)] gap-3 bg-warn-soft/50 px-5 py-2.5">
+                            <Avatar name="Pulse" pulse size={30} />
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-baseline gap-2">
+                                <span className="text-[13.5px] font-semibold text-accent">Pulse</span>
+                                <time className="font-mono text-[11px] text-fg-4">{clock(it.ts)}</time>
+                                <span className="inline-flex items-center gap-1 text-[11.5px] font-medium text-warn">
+                                  <Hourglass className="size-3" /> Waiting for you
+                                </span>
+                              </div>
+                              <div className="prose-msg text-[14px] leading-relaxed text-fg-2 [overflow-wrap:anywhere]" dangerouslySetInnerHTML={{ __html: mdInline(it.text) }} />
+                              <DraftActions approval={it.approval} />
+                            </div>
+                          </li>
+                        )
+                      }
                       const runId = it.kind === 'in' ? it.run?.runId : it.runId
                       const isSel = selected?.key === it.key
                       return (
