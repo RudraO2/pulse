@@ -4,7 +4,7 @@ import type { SlackAdapter } from '../channels/slack.js'
 import type { TelegramAdapter } from '../channels/telegram.js'
 import type { WhatsAppAdapter } from '../channels/whatsapp.js'
 import type { SendOptions } from '../channels/types.js'
-import type { GuardrailKind, Platform, WhatsAppState } from '../shared/events.js'
+import type { GuardrailKind, Platform, ReplyMode, WhatsAppState } from '../shared/events.js'
 import { SwyError } from '../swy/exec.js'
 import { setCooldownChats, type PolicyPlatform } from '../swy/policies.js'
 
@@ -15,7 +15,13 @@ import { setCooldownChats, type PolicyPlatform } from '../swy/policies.js'
 
 export const channels: { telegram?: TelegramAdapter; slack?: SlackAdapter; whatsapp?: WhatsAppAdapter } = {}
 
-export const whatsappState = (): WhatsAppState => channels.whatsapp?.state() ?? { status: 'off', groups: [], dms: true }
+export const whatsappState = (): WhatsAppState => channels.whatsapp?.state() ?? { status: 'off', groups: [], dms: true, dmsAuto: false, paused: false }
+
+/** Telegram and Slack are always auto; WhatsApp follows the organizer's per-chat switches. */
+export function replyMode(platform: Platform, chatId: string): ReplyMode {
+  if (platform === 'whatsapp') return channels.whatsapp?.replyMode(chatId) ?? 'paused'
+  return 'auto'
+}
 
 export interface PostOptions extends SendOptions {
   simulated?: boolean
@@ -25,6 +31,8 @@ export interface PostResult {
   ok: boolean
   msgId?: string
   duplicate?: boolean
+  /** not sent: waiting for the organizer's approval (approval id) */
+  held?: string
   blocked?: { kind: GuardrailKind; policyId?: string; message: string }
   error?: string
 }

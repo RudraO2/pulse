@@ -15,7 +15,7 @@ import QRCode from 'qrcode'
 import { bus } from '../bus.js'
 import { env } from '../config/env.js'
 import { formatFor } from '../agent/format.js'
-import type { InboundMessage, WhatsAppGroup, WhatsAppState } from '../shared/events.js'
+import type { InboundMessage, ReplyMode, WhatsAppGroup, WhatsAppState } from '../shared/events.js'
 import { kvGetJson, kvSetJson, setMember } from '../store/repo.js'
 import { outboxKey, withOutbox } from '../store/outbox.js'
 import { containsSecret } from '../swy/redact.js'
@@ -81,9 +81,11 @@ function personId(primary: string, alt?: string | null): string {
 export class WhatsAppAdapter implements ChannelAdapter {
   readonly platform = 'whatsapp' as const
   private sock?: WASocket
-  private st: WhatsAppState = { status: 'off', groups: [], dms: true }
+  private st: WhatsAppState = { status: 'off', groups: [], dms: true, dmsAuto: false, paused: false }
   private readonly meta = new Map<string, { name: string; size: number; people: Set<string> }>()
   private enabled = new Set<string>(kvGetJson<string[]>('whatsapp.groups') ?? [])
+  /** groups where Pulse replies without asking (default: every reply needs approval) */
+  private auto = new Set<string>(kvGetJson<string[]>('whatsapp.auto') ?? [])
   /** recent inbound messages, so replies can quote them */
   private readonly recent = new Map<string, WAMessage>()
   private reconnects = 0
@@ -93,6 +95,8 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
   constructor(private readonly hooks: WhatsAppHooks) {
     this.st.dms = kvGetJson<boolean>('whatsapp.dms') ?? true
+    this.st.dmsAuto = kvGetJson<boolean>('whatsapp.dmsAuto') ?? false
+    this.st.paused = kvGetJson<boolean>('whatsapp.paused') ?? false
   }
 
   // ── state ───────────────────────────────────────────────────────────────
@@ -117,7 +121,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
 
   private groupList(): WhatsAppGroup[] {
     return [...this.meta.entries()]
-      .map(([jid, g]) => ({ jid, name: g.name, size: g.size, enabled: this.enabled.has(jid) }))
+      .map(([jid, g]) => ({ jid, name: g.name, size: g.size, enabled: this.enabled.has(jid), auto: this.auto.has(jid) }))
       .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name))
   }
 
@@ -129,23 +133,62 @@ export class WhatsAppAdapter implements ChannelAdapter {
     return this.meta.get(jid)?.name
   }
 
-  setGroup(jid: string, on: boolean): WhatsAppState {
+  setGroup(jid: string, patch: { enabled?: boolean; auto?: boolean }): WhatsAppState {
     if (!isGroup(jid)) return this.state()
-    if (on) this.enabled.add(jid)
-    else this.enabled.delete(jid)
-    kvSetJson('whatsapp.groups', [...this.enabled])
     const name = this.meta.get(jid)?.name ?? jid
-    bus.emit({ type: 'log', level: 'info', text: `WhatsApp: Pulse ${on ? 'is on in' : 'left'} "${name}"` })
+    if (patch.enabled !== undefined) {
+      if (patch.enabled) this.enabled.add(jid)
+      else this.enabled.delete(jid)
+      kvSetJson('whatsapp.groups', [...this.enabled])
+      bus.emit({ type: 'log', level: 'info', text: `WhatsApp: Pulse ${patch.enabled ? 'is on in' : 'left'} "${name}"` })
+    }
+    if (patch.auto !== undefined) {
+      if (patch.auto) this.auto.add(jid)
+      else this.auto.delete(jid)
+      kvSetJson('whatsapp.auto', [...this.auto])
+      bus.emit({ type: 'log', level: 'info', text: `WhatsApp: "${name}" ${patch.auto ? 'on auto (no approval)' : 'needs approval for each reply'}` })
+    }
     this.emit()
     this.st.groups = this.groupList()
     return this.state()
   }
 
-  setDms(on: boolean): WhatsAppState {
-    kvSetJson('whatsapp.dms', on)
-    this.emit({ dms: on })
-    this.st.dms = on
+  setDms(patch: { enabled?: boolean; auto?: boolean }): WhatsAppState {
+    if (patch.enabled !== undefined) {
+      kvSetJson('whatsapp.dms', patch.enabled)
+      this.st.dms = patch.enabled
+    }
+    if (patch.auto !== undefined) {
+      kvSetJson('whatsapp.dmsAuto', patch.auto)
+      this.st.dmsAuto = patch.auto
+    }
+    this.emit()
     return this.state()
+  }
+
+  /** Master switch: paused = keep reading, send nothing on Pulse's own. */
+  setPaused(paused: boolean): WhatsAppState {
+    kvSetJson('whatsapp.paused', paused)
+    this.st.paused = paused
+    bus.emit({ type: 'log', level: 'info', text: paused ? 'WhatsApp: Pulse paused (reading, not replying)' : 'WhatsApp: Pulse replying again' })
+    this.status(this.st.status === 'connected' ? 'up' : 'disabled', this.statusDetail())
+    this.emit()
+    return this.state()
+  }
+
+  get paused(): boolean {
+    return this.st.paused
+  }
+
+  /** How Pulse may answer in this chat right now. */
+  replyMode(chatId: string): ReplyMode {
+    if (this.st.paused) return 'paused'
+    return (isGroup(chatId) ? this.auto.has(chatId) : this.st.dmsAuto) ? 'auto' : 'approve'
+  }
+
+  private statusDetail(): string {
+    const me = this.st.me
+    return `${me?.name ?? 'linked'}${me?.number ? ` · +${me.number}` : ''} · ${this.st.paused ? 'paused' : `${this.enabled.size} group(s) on`}`
   }
 
   // ── lifecycle ───────────────────────────────────────────────────────────
@@ -221,7 +264,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
         const me = sock.user
         const number = me?.id ? jidNormalizedUser(me.id).split('@')[0] : undefined
         this.emit({ status: 'connected', qr: undefined, me: { name: me?.name ?? me?.notify, number } })
-        this.status('up', `${me?.name ?? 'linked'}${number ? ` · +${number}` : ''} · ${this.enabled.size} group(s) on`)
+        this.status('up', this.statusDetail())
         this.beginDrain()
         void this.refreshGroups()
       }
@@ -441,6 +484,7 @@ export class WhatsAppAdapter implements ChannelAdapter {
     // Same secret patterns Pulse redacts everywhere else: never post a token.
     if (containsSecret(body)) throw new Error('blocked: the message contains a secret-like token')
     if (isGroup(chatId) && !this.enabled.has(chatId)) throw new Error('Pulse is off in this WhatsApp group')
+    if (this.st.paused && !opts.byOrganizer) throw new Error('Pulse is paused on WhatsApp')
     const key = opts.key ?? outboxKey('whatsapp', chatId, opts.replyToId, text)
     const res = await withOutbox({ platform: 'whatsapp', chatId, replyTo: opts.replyToId, text }, async () => {
       const sock = this.sock

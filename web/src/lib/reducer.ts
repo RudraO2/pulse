@@ -48,7 +48,7 @@ export function initialState(): ClientState {
     pending: [],
     cases: [],
     notify: { email: false, devices: 0, queued: 0, tunnel: 'off' },
-    whatsapp: { status: 'off', groups: [], dms: true },
+    whatsapp: { status: 'off', groups: [], dms: true, dmsAuto: false, paused: false },
     helpers: [],
     guardrails: [],
     selftest: [],

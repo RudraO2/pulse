@@ -2,8 +2,8 @@ import { quotesReplies, sendTools } from '../channels/platforms.js'
 import { generateText, isStepCount, tool, type LanguageModel } from 'ai'
 import { z } from 'zod'
 import { env } from '../config/env.js'
-import { channels, post } from '../core/channels.js'
-import { requestApproval, knowledgeAction } from '../core/approvals.js'
+import { channels, post, replyMode, type PostResult } from '../core/channels.js'
+import { requestApproval, knowledgeAction, postAction } from '../core/approvals.js'
 import { modsAvailable, platformLabel, postModsCard, quote } from '../core/mods.js'
 import type { Run } from '../core/runs.js'
 import { createPending, openAttention, savePending, updateAttention } from '../core/state-docs.js'
@@ -130,10 +130,19 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
   let replyText: string | undefined
   const usedKb = new Set<string>()
 
-  const sendToChat = async (text: string, step: ReturnType<Run['steps']['begin']>) => {
+  const sendToChat = async (text: string, step: ReturnType<Run['steps']['begin']>): Promise<PostResult> => {
+    const replyToId = quotesReplies(platform) && !target.joined ? target.msgId : undefined
+    // WhatsApp chats not on auto: the reply waits for the organizer (Inbox, phone push, ✅ in #mods).
+    if (replyMode(platform, chatId) === 'approve' && !simulated) {
+      const body = clampReply(text)
+      const action = postAction(platform, chatId, body, `Reply to ${target.userName} in ${platformLabel(platform)}${target.chatTitle ? ` · ${target.chatTitle}` : ''}`)
+      action.meta = { ...action.meta, replyToId }
+      const a = await requestApproval({ kind: 'post', title: `Reply to ${target.userName}`, summary: body, actions: [action], requestedBy: 'Pulse', runId: run.id, simulated })
+      return { ok: true, held: a.id }
+    }
     const res = await post(platform, chatId, clampReply(text), {
       runId: run.id,
-      replyToId: quotesReplies(platform) && !target.joined ? target.msgId : undefined,
+      replyToId,
       threadTs: threadRoot,
       simulated,
     })
@@ -183,7 +192,8 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
           else step.error(res.error ?? 'send failed')
           return res.blocked ? `BLOCKED by guardrail (${res.blocked.message}). Rephrase without the offending content and call reply again.` : `Send failed: ${res.error}`
         }
-        step.ok(full.slice(0, 200), { text: full, kb: valid.map((id) => getEntry(id)?.question) })
+        if (res.held) step.waiting(`reply drafted, waiting for your approval (${res.held})`, { text: full, approval: res.held })
+        else step.ok(full.slice(0, 200), { text: full, kb: valid.map((id) => getEntry(id)?.question) })
         for (const id of valid) {
           usedKb.add(id)
           markUsed(id, run.id)
@@ -191,7 +201,7 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
         markAnswered(platform, chatId, questionIds, 'bot', run.id)
         outcome = 'answered'
         replyText = full
-        return 'Posted.'
+        return res.held ? 'Drafted: the organizer approves it before it is sent.' : 'Posted.'
       },
     }),
 
@@ -210,10 +220,11 @@ export async function runCommunityAgent(input: CommunityRunInput): Promise<Commu
           step.error(res.blocked?.message ?? res.error ?? 'send failed')
           return `Failed: ${res.blocked?.message ?? res.error}`
         }
-        step.ok(text.slice(0, 200), { text })
+        if (res.held) step.waiting(`welcome drafted, waiting for your approval (${res.held})`, { text, approval: res.held })
+        else step.ok(text.slice(0, 200), { text })
         outcome = 'welcomed'
         replyText = text
-        return 'Posted.'
+        return res.held ? 'Drafted: the organizer approves it before it is sent.' : 'Posted.'
       },
     }),
 

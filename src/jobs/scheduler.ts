@@ -1,7 +1,7 @@
 import { quotesReplies, sendTools } from '../channels/platforms.js'
 import { bus } from '../bus.js'
 import { env } from '../config/env.js'
-import { post } from '../core/channels.js'
+import { post, replyMode } from '../core/channels.js'
 import { modsAvailable, platformLabel, postModsCard, quote } from '../core/mods.js'
 import { startRun } from '../core/runs.js'
 import { createPending, openAttention, savePending } from '../core/state-docs.js'
@@ -38,7 +38,8 @@ export async function runSweep(opts: SweepOptions = {}): Promise<{ checked: numb
     let nudged = 0
     for (const m of items.slice(0, 8)) {
       const hit = searchKnowledge(m.text, 1)[0]
-      if (hit && hit.score >= 4) {
+      // WhatsApp chats not on auto: organizers decide, so nudge them instead of answering.
+      if (hit && hit.score >= 4 && replyMode(m.platform, m.chatId) === 'auto') {
         const step = run.steps.begin('reply', `Answer ${m.userName} from the knowledge base`, hit.entry.question, undefined, sendTools(m.platform))
         const res = await post(m.platform, m.chatId, `Sorry for the wait, ${m.userName.split(' ')[0]}! ${hit.entry.answer}\n\n📎 [${hit.entry.question}](${hit.entry.url})`, {
           runId: run.id,

@@ -33,6 +33,8 @@ async function relay(p: PendingQuestion, text: string, runId: string): Promise<b
     replyToId: quotesReplies(p.platform) ? p.msgId : undefined,
     threadTs: p.platform === 'slack' ? p.msgId : undefined,
     simulated: p.simulated,
+    // the organizer's own answer, relayed
+    byOrganizer: true,
   })
   if (res.ok) {
     const key = chatKey(p.platform, p.chatId)
@@ -174,6 +176,7 @@ export function registerLearningFollowUps(): void {
     await post(meta.platform, meta.chatId, `📚 Saved ${firstName(meta.helper)}'s answer to the community FAQ, thanks ${firstName(meta.helper)}!`, {
       runId: a.runId,
       replyToId: quotesReplies(meta.platform) ? meta.msgId : undefined,
+      byOrganizer: true,
       threadTs: meta.platform === 'slack' ? meta.threadTs ?? meta.msgId : undefined,
       simulated: a.simulated,
     })

@@ -49,8 +49,9 @@ export const api = {
   waLink: () => request('POST', '/api/whatsapp/link'),
   waLogout: () => request('POST', '/api/whatsapp/logout'),
   waRefresh: () => request('POST', '/api/whatsapp/refresh'),
-  waGroup: (jid: string, enabled: boolean) => request('POST', '/api/whatsapp/groups', { jid, enabled }),
-  waDms: (enabled: boolean) => request('POST', '/api/whatsapp/dms', { enabled }),
+  waGroup: (jid: string, patch: { enabled?: boolean; auto?: boolean }) => request('POST', '/api/whatsapp/groups', { jid, ...patch }),
+  waDms: (patch: { enabled?: boolean; auto?: boolean }) => request('POST', '/api/whatsapp/dms', patch),
+  waPause: (paused: boolean) => request('POST', '/api/whatsapp/pause', { paused }),
   refresh: async () => {
     const snap = await request<StateSnapshot>('GET', '/api/state')
     if (snap) store.hydrate(snap)

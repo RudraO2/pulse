@@ -210,6 +210,7 @@ export async function replyToMember(id: string, text: string, by = 'the team'): 
   const body = `${text.trim()}\n\n_— ${by}_`
   const res = await post(target.platform, target.chatId, body, {
     replyToId: quotesReplies(target.platform) ? replyTo : undefined,
+    byOrganizer: true,
     threadTs: target.platform === 'slack' ? c?.threadTs ?? replyTo : undefined,
     simulated: target.simulated,
   })

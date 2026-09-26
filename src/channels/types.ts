@@ -8,6 +8,8 @@ export interface SendOptions {
   /** idempotency: an explicit outbox key (defaults to hash of chat+replyTo+text) */
   key?: string
   runId?: string
+  /** written or approved by an organizer: goes out even when Pulse is paused */
+  byOrganizer?: boolean
 }
 
 export interface OutboundMessage {

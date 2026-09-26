@@ -222,13 +222,14 @@ async function onBatch(key: string, batch: InboundMessage[]): Promise<void> {
   }
 }
 
-export function ingest(msg: InboundMessage): void {
+/** listenOnly: store and show the message, but no agent run (WhatsApp paused). */
+export function ingest(msg: InboundMessage, opts: { listenOnly?: boolean } = {}): void {
   const questionLike = !msg.joined && isQuestionLike(msg.text)
   const fresh = insertMessage(msg, questionLike)
   if (!fresh) return
   if (questionLike) insertQuestion({ platform: msg.platform, chatId: msg.chatId, msgId: msg.msgId, userName: msg.userName, text: msg.text, ts: msg.ts, simulated: msg.simulated })
   bus.emit({ type: 'message.in', msg })
-  batcher?.push(msg)
+  if (!opts.listenOnly) batcher?.push(msg)
 }
 
 export function createPipeline(opts: { groupCollectMs?: number; dmCollectMs?: number } = {}): Batcher {

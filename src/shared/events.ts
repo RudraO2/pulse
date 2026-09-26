@@ -296,6 +296,8 @@ export interface WhatsAppGroup {
   size: number
   /** Pulse only listens and replies in groups the organizer turned on */
   enabled: boolean
+  /** auto: Pulse replies on its own; otherwise each reply waits for the organizer's approval */
+  auto: boolean
 }
 
 export interface WhatsAppState {
@@ -307,7 +309,13 @@ export interface WhatsAppState {
   groups: WhatsAppGroup[]
   /** answer DMs from members of an enabled group */
   dms: boolean
+  dmsAuto: boolean
+  /** master switch: Pulse keeps reading but sends nothing on its own */
+  paused: boolean
 }
+
+/** How Pulse may answer in one chat. */
+export type ReplyMode = 'auto' | 'approve' | 'paused'
 
 export interface PendingQuestion {
   id: string

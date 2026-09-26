@@ -43,8 +43,9 @@ export interface AppHandlers {
     link: () => Promise<unknown>
     logout: () => Promise<unknown>
     refresh: () => Promise<unknown>
-    setGroup: (jid: string, enabled: boolean) => Promise<unknown>
-    setDms: (enabled: boolean) => Promise<unknown>
+    setGroup: (jid: string, patch: { enabled?: boolean; auto?: boolean }) => Promise<unknown>
+    setDms: (patch: { enabled?: boolean; auto?: boolean }) => Promise<unknown>
+    setPaused: (paused: boolean) => Promise<unknown>
   }
   onDemo?: (action: 'play' | 'pause' | 'resume' | 'stop' | 'reset' | 'speed', body: Record<string, unknown>) => Promise<unknown>
 }
@@ -225,17 +226,25 @@ export function createApp(opts: AppOptions): Hono {
   app.get('/api/guardrails', requireReader, c => call(opts.guardrails, c))
 
   // ── WhatsApp (linked device) ──────────────────────────────────────────────
+  const switches = (body: Record<string, unknown>) => ({
+    ...(typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}),
+    ...(typeof body.auto === 'boolean' ? { auto: body.auto } : {}),
+  })
   app.post('/api/whatsapp/link', requireAdmin, c => call(opts.whatsapp?.link, c))
   app.post('/api/whatsapp/logout', requireAdmin, c => call(opts.whatsapp?.logout, c))
   app.post('/api/whatsapp/refresh', requireAdmin, c => call(opts.whatsapp?.refresh, c))
   app.post('/api/whatsapp/groups', requireAdmin, async c => {
     const body = await readJson(c)
     if (typeof body.jid !== 'string' || !body.jid.endsWith('@g.us')) return c.json({ error: 'group jid required' }, 400)
-    return call(opts.whatsapp && (() => opts.whatsapp!.setGroup(String(body.jid), body.enabled === true)), c)
+    return call(opts.whatsapp && (() => opts.whatsapp!.setGroup(String(body.jid), switches(body))), c)
   })
   app.post('/api/whatsapp/dms', requireAdmin, async c => {
     const body = await readJson(c)
-    return call(opts.whatsapp && (() => opts.whatsapp!.setDms(body.enabled === true)), c)
+    return call(opts.whatsapp && (() => opts.whatsapp!.setDms(switches(body))), c)
+  })
+  app.post('/api/whatsapp/pause', requireAdmin, async c => {
+    const body = await readJson(c)
+    return call(opts.whatsapp && (() => opts.whatsapp!.setPaused(body.paused === true)), c)
   })
   app.get('/api/audit', requireReader, c => call(opts.audit, c))
 

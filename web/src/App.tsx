@@ -145,8 +145,9 @@ function TopBar() {
         </button>
         <div className="ml-auto flex items-center gap-1">
           <Heartbeat />
-          <button onClick={() => setWhatsapp(true)} className="relative ml-2 grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="WhatsApp" title={wa.status === 'connected' ? `WhatsApp: ${wa.groups.filter((g) => g.enabled).length} group(s) on` : 'Link WhatsApp'}>
+          <button onClick={() => setWhatsapp(true)} className="relative ml-2 grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="WhatsApp" title={wa.status !== 'connected' ? 'Link WhatsApp' : wa.paused ? 'WhatsApp: paused' : `WhatsApp: ${wa.groups.filter((g) => g.enabled).length} group(s) on`}>
             <PlatformIcon platform="whatsapp" className={clsx('size-4', wa.status !== 'connected' && 'opacity-50 grayscale')} />
+            {wa.status === 'connected' && wa.paused && <span className="absolute top-[7px] right-[7px] size-1.5 rounded-full bg-warn" />}
           </button>
           <button onClick={() => setPhone(true)} className="relative grid size-[34px] place-items-center rounded-lg text-fg-3 hover:bg-hover hover:text-fg" aria-label="Pulse on your phone" title="Pulse on your phone">
             <Smartphone className="size-4" />

@@ -83,7 +83,8 @@ async function main(): Promise<void> {
       const member = await channels.telegram.isMember(msg.userId)
       if (member) await addDmMember('telegram', msg.chatId)
     }
-    ingest(msg)
+    // WhatsApp master switch off: keep reading, don't reply.
+    ingest(msg, { listenOnly: msg.platform === 'whatsapp' && !!channels.whatsapp?.paused })
   }
 
   // ── channels ──────────────────────────────────────────────────────────────
@@ -161,8 +162,9 @@ async function main(): Promise<void> {
           link: () => channels.whatsapp!.link(),
           logout: () => channels.whatsapp!.logout(),
           refresh: () => channels.whatsapp!.refreshGroups(),
-          setGroup: async (jid, enabled) => channels.whatsapp!.setGroup(jid, enabled),
-          setDms: async (enabled) => channels.whatsapp!.setDms(enabled),
+          setGroup: async (jid, patch) => channels.whatsapp!.setGroup(jid, patch),
+          setDms: async (patch) => channels.whatsapp!.setDms(patch),
+          setPaused: async (paused) => channels.whatsapp!.setPaused(paused),
         }
       : undefined,
     onCaseResolve: async (id, by) => (id.startsWith('at_') ? resolveAttention(id) : resolveCase(id, by)) ?? { error: 'not found' },
