@@ -149,7 +149,7 @@ export const SEED: SeedEntry[] = [
   {
     question: 'Is REQUIRES_APPROVAL (human approval) available on the free plan?',
     answer:
-      'No. REQUIRES_APPROVAL needs the Business plan plus a Slack Socket-Mode app. On free, build your own approval loop: dry-run to preview, ask a human, then exec.',
+      'No, it needs the Business plan. Setup: enable Socket Mode on a Slack app (app token xapp- with connections:write), then app.swytchcode.com → Settings → Workspaces → HITL Notifications → Slack (bot token, app token, channel ID). A held call exits 7 and runs after Approve; a dry-run exits 7 too but creates nothing. Without a provider you get "No active HITL provider configured" and nothing runs. Track requests with `swy audit policy hitl|approved|rejected`. On free, build your own loop: dry-run, ask a human, then exec.',
   },
   {
     question: 'How do I pass API keys to Swytchcode?',

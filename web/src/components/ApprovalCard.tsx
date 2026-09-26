@@ -1,7 +1,7 @@
 import clsx from 'clsx'
-import { Check, ChevronDown, ChevronRight, CircleCheck, CircleX, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, CircleCheck, CircleX, Hand, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { useState } from 'react'
-import type { Approval } from '@shared/events'
+import type { Approval, SwyHold } from '@shared/events'
 import { api } from '../lib/api'
 import { mdInline, providerOf, timeAgo } from '../lib/format'
 import { Avatar, Badge, Button, JsonBlock, PlatformIcon } from '../ui/primitives'
@@ -24,6 +24,15 @@ const PREVIEW_LABEL: Record<Approval['kind'], string> = {
   email: 'The email',
   capability: 'The action',
   pin: 'The action',
+}
+
+const HOLD: Record<SwyHold['status'], { badge: string; line: string; tone: 'warn' | 'ok' | 'neutral' | 'bad' | 'accent' }> = {
+  required: { badge: 'mod approves', line: 'The pin waits for a mod to approve it in Slack', tone: 'accent' },
+  pending: { badge: 'waiting for mod', line: 'Swytchcode is holding the pin until a mod approves it in Slack', tone: 'warn' },
+  approved: { badge: 'mod approved', line: 'A mod approved the pin in Slack and Swytchcode ran it', tone: 'ok' },
+  rejected: { badge: 'mod rejected', line: 'A mod rejected the pin in Slack. Swytchcode did not run it', tone: 'neutral' },
+  expired: { badge: 'expired', line: 'Nobody approved the pin in time', tone: 'neutral' },
+  failed: { badge: 'not run', line: 'Swytchcode could not open the approval, so the pin did not run', tone: 'bad' },
 }
 
 export function StatusBadge({ a }: { a: Approval }) {
@@ -71,6 +80,7 @@ export function ApprovalCard({ approval: a, compact, bare }: { approval: Approva
   const blocked = a.actions.filter((x) => !!x.blocked)
   const targets = [...new Set(a.actions.map((x) => providerOf(x.tool)))]
   const social = a.kind === 'announcement' || a.kind === 'post'
+  const hold = a.actions.find((x) => x.hold)?.hold
 
   return (
     <div className={clsx(!bare && 'card overflow-hidden', !bare && a.status === 'pending' && 'border-[color-mix(in_oklab,var(--warn)_40%,var(--line))] shadow-[0_0_0_4px_var(--warn-soft)]')}>
@@ -110,6 +120,17 @@ export function ApprovalCard({ approval: a, compact, bare }: { approval: Approva
         </div>
       )}
 
+      {!compact && hold && (
+        <div
+          className={clsx('flex items-center gap-2 border-t border-line px-4 py-2.5 text-[12.5px]', hold.status === 'pending' ? 'bg-warn-soft text-fg' : 'text-fg-2')}
+          title={`Swytchcode REQUIRES_APPROVAL policy${hold.auditId ? ` · audit ${hold.auditId.slice(0, 12)}` : ''}`}
+        >
+          <Hand className={clsx('size-3.5 shrink-0', hold.status === 'pending' ? 'text-warn' : hold.status === 'approved' ? 'text-ok' : 'text-fg-3')} />
+          <span className="min-w-0 flex-1">{HOLD[hold.status].line}</span>
+          <Badge tone={HOLD[hold.status].tone}>Swytchcode</Badge>
+        </div>
+      )}
+
       {!compact && a.actions.length > 0 && (
         <div className="border-t border-line bg-subtle/60">
           <button onClick={() => setShowRequests((o) => !o)} aria-expanded={showRequests} className="flex w-full items-center gap-2 px-4 py-2.5 text-left transition-colors hover:bg-hover">
@@ -130,6 +151,7 @@ export function ApprovalCard({ approval: a, compact, bare }: { approval: Approva
                     {x.ok === true && <CircleCheck className="size-3.5 text-ok" />}
                     {x.ok === false && <CircleX className="size-3.5 text-bad" />}
                     {x.blocked && <Badge tone="bad">blocked</Badge>}
+                    {x.hold && <Badge tone={HOLD[x.hold.status].tone}>{HOLD[x.hold.status].badge}</Badge>}
                     {x.preview && <span className="hidden font-mono text-[11px] text-fg-4 sm:inline">{x.preview.method}</span>}
                     <ChevronRight className={clsx('size-3.5 text-fg-4 transition-transform', openIdx === i && 'rotate-90')} />
                   </button>

@@ -4,19 +4,21 @@ import { env } from '../config/env.js'
 import { formatFor } from '../agent/format.js'
 import { addKnowledge, updateKnowledge } from '../kb/knowledge.js'
 import type { NewEntry } from '../kb/notion.js'
-import type { Approval, ApprovalAction, ApprovalKind, Platform } from '../shared/events.js'
+import type { Approval, ApprovalAction, ApprovalKind, Platform, SwyHold } from '../shared/events.js'
 import { getDoc, listDocs, putDoc } from '../store/repo.js'
 import { withOutbox } from '../store/outbox.js'
-import { swyExec, SwyError } from '../swy/exec.js'
+import { swyAuditPolicy, swyExec, SwyError } from '../swy/exec.js'
 import { redactDeep } from '../swy/redact.js'
 import { channels, post, reportBlock } from './channels.js'
 import { modsAvailable, modsChannel, postModsCard } from './mods.js'
 
-// Human approval for anything broadcast-shaped. Swytchcode's own
-// REQUIRES_APPROVAL is Business-plan only, so Pulse runs the loop itself:
-//   dry-run every action through Swytchcode (exact HTTP request, policies
-//   enforced) → approval card on the dashboard + in Slack #mods
-//   → ✅ reaction or dashboard click → execute once (outbox-keyed) → report.
+// Human approval for anything broadcast-shaped, in two layers:
+//   1. Pulse's own loop: dry-run every action through Swytchcode (exact HTTP
+//      request, policies enforced) → approval card on the dashboard + in Slack
+//      #mods → ✅ reaction or dashboard click → execute once (outbox-keyed).
+//   2. Swytchcode's REQUIRES_APPROVAL (Business plan, SWYTCHCODE_HITL=true):
+//      pins are held by Swytchcode itself until a mod clicks Approve in Slack,
+//      then Swytchcode runs them. Pulse only watches `swy audit policy`.
 
 export const TOOL = {
   tgSend: 'telegram_v5_0.sendmessage.create',
@@ -98,12 +100,32 @@ export async function previewAction(a: ApprovalAction, runId?: string): Promise<
   try {
     const r = await swyExec(a.tool, a.args as Record<string, unknown>, { dryRun: true, runId })
     const req = r.request
-    return { ...a, preview: req ? (redactDeep({ method: req.method, url: req.url, body: req.body }) as ApprovalAction['preview']) : undefined }
+    const hold = a.pin ? await previewPinHold(a, runId) : undefined
+    return { ...a, preview: req ? (redactDeep({ method: req.method, url: req.url, body: req.body }) as ApprovalAction['preview']) : undefined, ...(hold ? { hold } : {}) }
   } catch (e) {
     const platform = a.tool.startsWith('telegram') ? 'telegram' : a.tool.startsWith('slack') ? 'slack' : undefined
     const blocked = reportBlock(e, { platform, runId })
     if (blocked) return { ...a, blocked: `${blocked.policyId ?? blocked.kind}: ${blocked.message}` }
     return { ...a, blocked: `dry-run failed: ${e instanceof SwyError ? e.message : String(e)}`.slice(0, 240) }
+  }
+}
+
+function pinCall(platform: Platform, chatId: string, msgId: string): { tool: string; args: Record<string, unknown> } {
+  return platform === 'telegram'
+    ? { tool: TOOL.tgPin, args: { body: { chat_id: chatId, message_id: Number(msgId), disable_notification: true } } }
+    : { tool: TOOL.slackPin, args: { body: { channel: chatId, timestamp: msgId } } }
+}
+
+/** Dry-run the pin: if Swytchcode says a mod must approve it, show that on the card before anything runs. */
+async function previewPinHold(a: ApprovalAction, runId?: string): Promise<SwyHold | undefined> {
+  const meta = (a.meta ?? {}) as { platform?: Platform; chatId?: string }
+  if (!meta.platform || !meta.chatId) return undefined
+  const { tool, args } = pinCall(meta.platform, meta.chatId, meta.platform === 'telegram' ? '1' : '1.000001')
+  try {
+    await swyExec(tool, args, { dryRun: true, runId })
+    return undefined
+  } catch (e) {
+    return e instanceof SwyError && e.wouldNeedApproval ? { tool, status: 'required', message: 'A mod approves the pin in Slack (Swytchcode)' } : undefined
   }
 }
 
@@ -152,7 +174,7 @@ export async function requestApproval(input: {
     simulated: input.simulated,
   })
   if (input.mirrorToSlack !== false && modsAvailable()) {
-    const lines = actions.map((a) => `• ${a.label}  \`${a.tool}\`${a.preview ? ` → ${a.preview.method} ${shortUrl(a.preview.url)}` : ''}${a.blocked ? `  ⛔ ${a.blocked}` : ''}`)
+    const lines = actions.map((a) => `• ${a.label}  \`${a.tool}\`${a.preview ? ` → ${a.preview.method} ${shortUrl(a.preview.url)}` : ''}${a.blocked ? `  ⛔ ${a.blocked}` : ''}${a.hold ? '\n   ✋ the pin waits for a mod to approve it here (Swytchcode)' : ''}`)
     const card = await postModsCard(
       `${EMOJI[input.kind]} **Approval needed: ${input.title}**\n${input.summary}\n\n${lines.join('\n')}\n\nReact ✅ to run or ❌ to cancel (or use the Pulse dashboard).`,
       { runId: input.runId },
@@ -211,11 +233,26 @@ async function executeAction(a: Approval, action: ApprovalAction, i: number): Pr
     if ((action.tool === TOOL.tgSend || action.tool === TOOL.slackPost) && meta.platform && meta.chatId && meta.text) {
       const res = await post(meta.platform, meta.chatId, meta.text, { key, runId: a.runId, threadTs: meta.threadTs, simulated: a.simulated })
       if (!res.ok) return { ...action, ok: false, result: res.blocked ? `blocked by ${res.blocked.policyId ?? res.blocked.kind}` : res.error }
+      const posted = `posted${res.msgId ? ` (${res.msgId})` : ''}`
       if (action.pin && res.msgId) {
-        if (meta.platform === 'telegram') await swyExec(TOOL.tgPin, { body: { chat_id: meta.chatId, message_id: Number(res.msgId), disable_notification: true } }, { runId: a.runId })
-        else await swyExec(TOOL.slackPin, { body: { channel: meta.chatId, timestamp: res.msgId } }, { runId: a.runId })
+        const { tool, args } = pinCall(meta.platform, meta.chatId, res.msgId)
+        const requestedAt = Date.now()
+        try {
+          await swyExec(tool, args, { runId: a.runId })
+        } catch (e) {
+          if (!(e instanceof SwyError) || !(e.isApprovalHold || e.isApprovalRefused)) throw e
+          const hold: SwyHold = e.isApprovalHold
+            ? { tool, status: 'pending', auditId: e.auditIds[0], requestedAt, message: 'Waiting for a mod to approve in Slack' }
+            : { tool, status: 'failed', auditId: e.auditIds[0], requestedAt, message: e.message.slice(0, 200) }
+          bus.emit({
+            type: 'log',
+            level: e.isApprovalHold ? 'info' : 'warn',
+            text: e.isApprovalHold ? `Swytchcode is holding the pin for a mod (${a.title})` : `Swytchcode approval unavailable, pin not run: ${hold.message}`,
+          })
+          return { ...action, ok: true, hold, result: `${posted}, ${e.isApprovalHold ? 'pin waiting for a mod' : 'pin not run'}` }
+        }
       }
-      return { ...action, ok: true, result: `posted${res.msgId ? ` (${res.msgId})` : ''}${action.pin ? ', pinned' : ''}` }
+      return { ...action, ok: true, result: `${posted}${action.pin ? ', pinned' : ''}` }
     }
     if (action.tool === TOOL.notionCreate && meta.entry) {
       const entry = await addKnowledge({ ...meta.entry, scripted: a.simulated || meta.entry.scripted }, a.runId)
@@ -251,8 +288,51 @@ let watcher: ReturnType<typeof setInterval> | undefined
 
 export function startApprovalWatcher(everyMs = 4000): void {
   if (watcher) return
-  watcher = setInterval(() => void checkReactions(), everyMs)
+  watcher = setInterval(() => void Promise.allSettled([checkReactions(), checkHolds()]), everyMs)
   watcher.unref?.()
+}
+
+// ── Swytchcode holds: follow the mod's decision in Swytchcode's audit log ──
+
+const HOLD_STATUS: Record<string, SwyHold['status']> = { hitl: 'pending', approved: 'approved', rejected: 'rejected', expired: 'expired', failed: 'failed' }
+const HOLD_NOTE: Partial<Record<SwyHold['status'], string>> = {
+  approved: '📌 A mod approved the pin in Slack and Swytchcode ran it.',
+  rejected: '🚫 A mod rejected the pin in Slack. Swytchcode did not run it.',
+  expired: '⌛ Nobody approved the pin in time. Swytchcode dropped it.',
+  failed: '⚠️ Swytchcode could not run the approved pin.',
+}
+let checkingHolds = false
+
+export async function checkHolds(): Promise<void> {
+  if (checkingHolds) return
+  const waiting = allApprovals(50).filter((a) => a.actions.some((x) => x.hold?.status === 'pending'))
+  if (!waiting.length) return
+  checkingHolds = true
+  try {
+    const entries = await swyAuditPolicy(50)
+    for (const a of waiting) {
+      const notes: string[] = []
+      const actions = a.actions.map((x) => {
+        const h = x.hold
+        if (h?.status !== 'pending') return x
+        const hit = entries.find((e) => (h.auditId ? e.id === h.auditId : e.tool === h.tool && e.requestedAt * 1000 >= (h.requestedAt ?? 0) - 2000))
+        const status = hit ? HOLD_STATUS[hit.status] : undefined
+        if (!hit || !status || status === 'pending') return x
+        const note = HOLD_NOTE[status]
+        if (note) notes.push(note)
+        const result = (x.result ?? '').replace(/, pin waiting for a mod$/, status === 'approved' ? ', pinned (mod approved)' : `, pin ${status}`)
+        return { ...x, result, hold: { ...h, auditId: hit.id, status, resolvedAt: hit.resolvedAt ? hit.resolvedAt * 1000 : Date.now() } }
+      })
+      if (!notes.length) continue
+      const next = save({ ...a, actions })
+      for (const note of notes) {
+        bus.emit({ type: 'log', level: 'info', text: `${note} (${next.title})` })
+        if (next.slackTs) void postModsCard(note, { threadTs: next.slackTs })
+      }
+    }
+  } finally {
+    checkingHolds = false
+  }
 }
 
 export function stopApprovalWatcher(): void {

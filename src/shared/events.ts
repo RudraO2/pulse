@@ -119,8 +119,8 @@ export interface Counters {
 
 export interface SelfTestResult {
   name: string
-  expect: 'block' | 'pass'
-  got: 'block' | 'pass' | 'error'
+  expect: 'block' | 'pass' | 'approval'
+  got: 'block' | 'pass' | 'approval' | 'error'
   ok: boolean
   policyId?: string
   detail?: string
@@ -165,6 +165,19 @@ export interface ApprovalAction {
   /** filled after execution */
   result?: string
   ok?: boolean
+  /** Swytchcode human approval on this action's pin (REQUIRES_APPROVAL, Business plan) */
+  hold?: SwyHold
+}
+
+export interface SwyHold {
+  tool: string
+  /** required = dry-run says a mod must approve; pending = waiting in Slack; failed = Swytchcode couldn't open the request */
+  status: 'required' | 'pending' | 'approved' | 'rejected' | 'expired' | 'failed'
+  /** Swytchcode audit id (`swy audit policy --info <id>`) */
+  auditId?: string
+  message?: string
+  requestedAt?: number
+  resolvedAt?: number
 }
 
 export type ApprovalKind = 'announcement' | 'knowledge' | 'poll' | 'email' | 'capability' | 'pin' | 'post'

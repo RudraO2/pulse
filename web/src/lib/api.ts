@@ -58,7 +58,7 @@ export interface GuardrailsInfo {
 
 export interface AuditInfo {
   network: Array<{ id: string; tool: string; host: string; method: string; status: number; durationMs: number; timestamp: string }>
-  policy: Array<{ id: string; tool: string; policyId: string; status: string; requestedAt: number }>
+  policy: Array<{ id: string; tool: string; policyId: string; status: string; requestedAt: number; resolvedAt?: number }>
 }
 
 export interface ScenarioInfo {

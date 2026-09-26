@@ -16,6 +16,8 @@ export const TOOLS = {
   slackPost: 'slack.chat.postmessage.create',
   slackUpdate: 'slack.chat.update.create',
   resendEmail: 'resend.email.create',
+  telegramPin: 'telegram_v5_0.pinchatmessage.create',
+  slackPin: 'slack.pins.add.create',
 } as const
 
 export const guardrails = {
@@ -54,6 +56,15 @@ export const guardrails = {
     /** Always allowed in addition to DIGEST_TO / EMAIL_ALLOWLIST (self-test canary). */
     canary: 'canary@pulse.invalid',
     message: 'Pulse can only email allow-listed organizer addresses.',
+  },
+  modApproval: {
+    /**
+     * REQUIRES_APPROVAL (Swytchcode Business, SWYTCHCODE_HITL=true): a pin
+     * shows a message to everyone for days, so Swytchcode itself holds it and
+     * asks a mod in Slack. Pulse can't skip this, whatever the prompt says.
+     */
+    targets: [TOOLS.telegramPin, TOOLS.slackPin],
+    message: 'Pinning shows a message to everyone. A mod must approve it in Slack.',
   },
   /** App-side token bucket that feeds the cooldown policy. */
   rateLimit: {

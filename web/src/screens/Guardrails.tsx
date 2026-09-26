@@ -1,7 +1,7 @@
 import clsx from 'clsx'
-import { ArrowRight, ChevronDown, CircleCheck, CircleX, FlaskConical, Lock, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { ArrowRight, ChevronDown, CircleCheck, CircleX, FlaskConical, Hand, Lock, RefreshCw, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { api, type GuardrailsInfo } from '../lib/api'
+import { api, type AuditInfo, type GuardrailsInfo } from '../lib/api'
 import { clock, ms, providerOf, timeAgo } from '../lib/format'
 import { useStore } from '../lib/store'
 import { Badge, Button, Card, EmptyState, Metrics, PageHeader, PlatformIcon, Segmented, ToolChip } from '../ui/primitives'
@@ -16,9 +16,18 @@ const PLAIN: Record<string, { title: string; why: string }> = {
   'no-mass-mention': { title: 'No @channel or @everyone', why: 'Pulse can never mass-ping a Slack channel, whatever the prompt says.' },
   'no-shady-links': { title: 'No hidden links', why: 'Link shorteners, raw-IP and script links are refused in community posts (phishing and prompt-injection spam).' },
   'email-recipients': { title: 'Email only allow-listed people', why: 'Resend emails can only go to the organizers’ allow-listed addresses.' },
+  'mod-approves-pins': { title: 'Pins need a mod', why: 'A pin shows a message to everyone. Swytchcode holds it and asks a mod in Slack, then runs it only after Approve.' },
 }
 
-type Tab = 'policies' | 'blocked' | 'audit' | 'allow' | 'selftest'
+const HOLD_LABEL: Record<string, { label: string; tone: 'warn' | 'ok' | 'neutral' | 'bad' }> = {
+  hitl: { label: 'Waiting for mod', tone: 'warn' },
+  approved: { label: 'Approved', tone: 'ok' },
+  rejected: { label: 'Rejected', tone: 'neutral' },
+  expired: { label: 'Expired', tone: 'neutral' },
+  failed: { label: 'Not run', tone: 'bad' },
+}
+
+type Tab = 'policies' | 'blocked' | 'approvals' | 'audit' | 'allow' | 'selftest'
 
 export function GuardrailsScreen() {
   const [info, setInfo] = useState<GuardrailsInfo>()
@@ -26,13 +35,22 @@ export function GuardrailsScreen() {
   const [tab, setTab] = useState<Tab>('policies')
   const [openPolicy, setOpenPolicy] = useState<string>()
   const [auditFilter, setAuditFilter] = useState<'all' | 'dry' | 'blocked'>('all')
+  const [swyAudit, setSwyAudit] = useState<AuditInfo>()
+  const [loadingAudit, setLoadingAudit] = useState(false)
   const hits = useStore((s) => s.guardrails)
   const selftest = useStore((s) => s.selftest)
   const calls = useStore((s) => s.swyCalls)
   const stats = useStore((s) => s.swyStats)
 
+  const loadAudit = async () => {
+    setLoadingAudit(true)
+    setSwyAudit(await api.audit())
+    setLoadingAudit(false)
+  }
+
   useEffect(() => {
     void api.guardrails().then(setInfo)
+    void loadAudit()
   }, [])
 
   const hitCount = useMemo(() => {
@@ -53,6 +71,8 @@ export function GuardrailsScreen() {
     .filter((c) => !c.cached)
     .filter((c) => auditFilter === 'all' || (auditFilter === 'dry' ? c.command === 'dry-run' : c.status !== 'ok'))
     .slice(0, 40)
+  const holds = (swyAudit?.policy ?? []).filter((e) => e.status in HOLD_LABEL)
+  const hasHitl = !!info?.policies.policies.some((p) => p.action.type === 'REQUIRES_APPROVAL')
   const latest = hits[0]
   const policies = [...(info?.policies.policies ?? [])].sort((a, b) => (hitCount.get(b.id) ?? 0) - (hitCount.get(a.id) ?? 0))
 
@@ -121,6 +141,7 @@ export function GuardrailsScreen() {
           options={[
             { value: 'policies', label: 'Policies', count: info?.policies.policies.length },
             { value: 'blocked', label: 'Blocked', count: hits.length },
+            ...(hasHitl || holds.length ? [{ value: 'approvals' as const, label: 'Mod approvals', count: holds.length }] : []),
             { value: 'audit', label: 'Audit log' },
             { value: 'allow', label: 'Allow-list', count: info?.tooling.length },
             { value: 'selftest', label: 'Self-test' },
@@ -145,7 +166,11 @@ export function GuardrailsScreen() {
                       <span className="min-w-0">
                         <span className="block truncate text-[13.5px] font-medium text-fg">{plain?.title ?? p.id}</span>
                       </span>
-                      <span className={clsx('text-[12.5px] tabular-nums', n ? 'font-semibold text-bad' : 'text-fg-4')}>{n ? `${n} blocked` : 'no hits'}</span>
+                      {p.action.type === 'REQUIRES_APPROVAL' ? (
+                        <span className="text-[12.5px] text-fg-3">asks a mod</span>
+                      ) : (
+                        <span className={clsx('text-[12.5px] tabular-nums', n ? 'font-semibold text-bad' : 'text-fg-4')}>{n ? `${n} blocked` : 'no hits'}</span>
+                      )}
                       <ChevronDown className={clsx('size-4 text-fg-4 transition-transform', open && 'rotate-180')} />
                     </button>
                     {open && (
@@ -153,7 +178,9 @@ export function GuardrailsScreen() {
                         <p className="text-[13px] leading-relaxed text-fg-2">{plain?.why ?? p.action.message}</p>
                         <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                           <Badge mono>{p.id}</Badge>
-                          <Badge tone={p.action.type === 'RATE_LIMITED' ? 'warn' : 'neutral'}>{p.action.type === 'RATE_LIMITED' ? 'Rate limit' : 'Deny'}</Badge>
+                          <Badge tone={p.action.type === 'RATE_LIMITED' ? 'warn' : p.action.type === 'REQUIRES_APPROVAL' ? 'accent' : 'neutral'}>
+                            {p.action.type === 'RATE_LIMITED' ? 'Rate limit' : p.action.type === 'REQUIRES_APPROVAL' ? 'Human approval' : 'Deny'}
+                          </Badge>
                           {p.target.map((t) => (
                             <ToolChip key={t} id={t} />
                           ))}
@@ -196,6 +223,46 @@ export function GuardrailsScreen() {
             </ul>
           ) : (
             <EmptyState icon={<ShieldCheck className="size-4" />} title="Nothing blocked yet" />
+          )}
+        </Card>
+      )}
+
+      {tab === 'approvals' && (
+        <Card className="overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
+            <span className="text-[12.5px] text-fg-3" title="swy audit policy: Swytchcode's own record of every approval request">
+              From Swytchcode’s audit log · mods decide in Slack
+            </span>
+            <Button size="sm" variant="ghost" icon={<RefreshCw className="size-3.5" />} loading={loadingAudit} onClick={() => void loadAudit()}>
+              Refresh
+            </Button>
+          </div>
+          {holds.length ? (
+            <ul className="divide-y divide-line">
+              {holds.map((e) => (
+                <li key={e.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 px-5 py-3">
+                  <span className={clsx('grid size-7 place-items-center rounded-lg', e.status === 'hitl' ? 'bg-warn-soft text-warn' : 'bg-subtle text-fg-3')}>
+                    <Hand className="size-3.5" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="flex items-center gap-1.5 font-mono text-[11.5px] text-fg-2">
+                        <PlatformIcon platform={providerOf(e.tool)} className="size-3" />
+                        {e.tool}
+                      </span>
+                      <Badge mono>{e.policyId}</Badge>
+                    </div>
+                    <div className="mt-0.5 font-mono text-[11px] text-fg-4" title={e.id}>
+                      {e.id.slice(0, 12)} · {timeAgo(e.requestedAt * 1000)}
+                      {e.resolvedAt ? ` · decided in ${ms((e.resolvedAt - e.requestedAt) * 1000)}` : ''}
+                    </div>
+                  </div>
+                  <Badge tone={HOLD_LABEL[e.status]!.tone}>{HOLD_LABEL[e.status]!.label}</Badge>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState icon={<Hand className="size-4" />} title="No approval requests yet" />
           )}
         </Card>
       )}
@@ -292,7 +359,7 @@ export function GuardrailsScreen() {
                   <li key={r.name} className="flex items-center gap-2.5 border-line px-5 py-2.5 md:border-b">
                     {r.ok ? <CircleCheck className="size-3.5 shrink-0 text-ok" /> : <CircleX className="size-3.5 shrink-0 text-bad" />}
                     <span className="min-w-0 flex-1 truncate text-[13px] text-fg-2">{r.name}</span>
-                    <span className="font-mono text-[11px] text-fg-4">{r.got === 'block' ? 'blocked' : r.got === 'pass' ? 'allowed' : r.got}</span>
+                    <span className="font-mono text-[11px] text-fg-4">{r.got === 'block' ? 'blocked' : r.got === 'pass' ? 'allowed' : r.got === 'approval' ? 'needs mod' : r.got}</span>
                   </li>
                 ))}
               </ul>

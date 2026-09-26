@@ -100,6 +100,23 @@ export function compilePolicies(dyn: DynamicPolicyState, g: Guardrails = default
     action: { type: 'POLICY_BLOCKED', message: g.emailRecipients.message },
   })
 
+  // Swytchcode human approval: the call is held until a mod clicks Approve in
+  // Slack, then Swytchcode runs it. Off unless the workspace has a HITL provider.
+  if (env.SWYTCHCODE_HITL) {
+    policies.push({
+      id: 'mod-approves-pins',
+      target: [...g.modApproval.targets],
+      when: {
+        operator: 'any',
+        conditions: [
+          { field: 'chat_id', operator: 'exists', value: null },
+          { field: 'channel', operator: 'exists', value: null },
+        ],
+      },
+      action: { type: 'REQUIRES_APPROVAL', message: g.modApproval.message },
+    })
+  }
+
   policies.push({
     id: 'cooldown-telegram',
     target: [...g.cooldown.telegramTargets],

@@ -1,6 +1,7 @@
 import { bus } from '../bus.js'
 import type { SelfTestResult } from '../shared/events.js'
 import { TOOLS } from '../../guardrails.config.js'
+import { env } from '../config/env.js'
 import { SwyError, swyExec, type SwyArgs } from './exec.js'
 import { CANARY } from './policies.js'
 
@@ -10,7 +11,7 @@ import { CANARY } from './policies.js'
 
 interface Case {
   name: string
-  expect: 'block' | 'pass'
+  expect: 'block' | 'pass' | 'approval'
   tool: string
   args: SwyArgs
 }
@@ -40,11 +41,20 @@ export const SELFTEST_CASES: Case[] = [
   { name: 'Tool outside the allow-list is refused', expect: 'block', tool: 'telegram_v5_0.deletemessage.create', args: { body: { chat_id: Number(CANARY.telegram.cleanGroup), message_id: 1 } } },
 ]
 
+/** Swytchcode human approval (Business plan): a dry-run reports the hold without creating a request. */
+export const HITL_CASES: Case[] = [
+  { name: 'Telegram pin waits for a mod', expect: 'approval', tool: TOOLS.telegramPin, args: { body: { chat_id: Number(CANARY.telegram.cleanGroup), message_id: 1, disable_notification: true } } },
+  { name: 'Slack pin waits for a mod', expect: 'approval', tool: TOOLS.slackPin, args: { body: { channel: CANARY.slack.cleanChannel, timestamp: '1.000001' } } },
+]
+
 async function runCase(c: Case): Promise<SelfTestResult> {
   try {
     await swyExec(c.tool, c.args, { dryRun: true, runId: 'selftest', timeoutMs: 45_000 })
     return { name: c.name, expect: c.expect, got: 'pass', ok: c.expect === 'pass' }
   } catch (e) {
+    if (e instanceof SwyError && e.wouldNeedApproval) {
+      return { name: c.name, expect: c.expect, got: 'approval', ok: c.expect === 'approval', policyId: 'mod-approves-pins', detail: 'held for a mod' }
+    }
     if (e instanceof SwyError && (e.isPolicy || e.category === 'rate_limit' || e.category === 'not_found')) {
       return {
         name: c.name,
@@ -59,7 +69,7 @@ async function runCase(c: Case): Promise<SelfTestResult> {
   }
 }
 
-export async function runGuardrailSelfTest(cases: Case[] = SELFTEST_CASES): Promise<SelfTestResult[]> {
+export async function runGuardrailSelfTest(cases: Case[] = env.SWYTCHCODE_HITL ? [...SELFTEST_CASES, ...HITL_CASES] : SELFTEST_CASES): Promise<SelfTestResult[]> {
   const results = await Promise.all(cases.map(runCase))
   bus.emit({ type: 'selftest', results })
   return results

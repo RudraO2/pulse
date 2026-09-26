@@ -28,6 +28,12 @@ const schema = z.object({
 
   SWYTCHCODE_BIN: opt,
   SWYTCHCODE_TOKEN: opt,
+  /**
+   * Swytchcode human approval (Business plan): pins need a mod's Approve in
+   * Slack before they run. Needs a HITL provider on the workspace
+   * (app.swytchcode.com → Settings → Workspaces → HITL Notifications).
+   */
+  SWYTCHCODE_HITL: bool(false),
 
   GOOGLE_GENERATIVE_AI_API_KEY: opt,
   GROQ_API_KEY: opt,

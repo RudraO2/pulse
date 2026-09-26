@@ -95,6 +95,21 @@ export class SwyError extends Error {
     this.data = init.data
   }
 
+  /** REQUIRES_APPROVAL: Swytchcode is holding the call until a mod approves it (exit 7). */
+  get isApprovalHold(): boolean {
+    return this.category === 'approval_pending'
+  }
+
+  /** Dry-run of a REQUIRES_APPROVAL call: a live run would be held for a mod (nothing was created). */
+  get wouldNeedApproval(): boolean {
+    return this.category === 'approval_required'
+  }
+
+  /** REQUIRES_APPROVAL matched but Swytchcode couldn't open the request (e.g. no HITL provider). Nothing ran. */
+  get isApprovalRefused(): boolean {
+    return this.category === 'approval_failed'
+  }
+
   /** Blocked by a policies.json rule (POLICY_BLOCKED → policy_denied, RATE_LIMITED → rate_limit). */
   get isPolicy(): boolean {
     return this.category === 'policy_denied' || this.category === 'policy_error' || (this.category === 'rate_limit' && !!this.policyId)
@@ -268,7 +283,8 @@ function emitEnd(callId: string, call: SwyCall, o: { ok: boolean; durationMs: nu
 function toSwyError(tool: string, out: ProcOutput): SwyError {
   const payload = parseErrorPayload(out.stderr, out.stdout)
   const message = payload?.error ?? (out.stderr.trim().split(/\r?\n/).pop() || `swytchcode exited with code ${out.code}`)
-  const category = payload?.category ?? inferCategory(out.code, message)
+  const approval = approvalState(out)
+  const category = approval ?? payload?.category ?? inferCategory(out.code, message)
   const block = parsePolicyBlock(message)
   return new SwyError({
     message,
@@ -285,9 +301,25 @@ function toSwyError(tool: string, out: ProcOutput): SwyError {
   })
 }
 
-/** Policy blocks don't print the pol_ id; fetch it from the local audit log. */
+/**
+ * REQUIRES_APPROVAL outcomes. Verified 2026-09-26 (2.23.7): with no HITL
+ * provider the CLI prints "This command needs approval, but the request could
+ * not be created … The command was not run." and exits 6; a created request
+ * exits 7 and runs in the background once a mod approves. A dry-run exits 7
+ * with "would require human approval … (dry-run/explain)" and creates nothing.
+ */
+function approvalState(out: ProcOutput): 'approval_pending' | 'approval_failed' | 'approval_required' | undefined {
+  const text = `${out.stdout}
+${out.stderr}`
+  if (/would require human approval|approval required \(dry-run/i.test(text)) return 'approval_required'
+  if (/approval request refused|request could not be created/i.test(text)) return 'approval_failed'
+  if (out.code === 7 || /pending approval|awaiting approval|waiting for approval|approval request (created|sent)|sent for approval/i.test(text)) return 'approval_pending'
+  return undefined
+}
+
+/** Policy blocks and approval holds don't print their id; fetch it from the local audit log. */
 async function attachPolicyAuditId(err: SwyError, since: number): Promise<SwyError> {
-  if (!err.isPolicy) return err
+  if (!err.isPolicy && !err.isApprovalHold && !err.isApprovalRefused) return err // dry-run holds leave no audit entry
   try {
     const entries = await swyAuditPolicy(10)
     const hit = entries.find((e) => e.tool === err.tool && e.requestedAt * 1000 >= since - 2000)
@@ -562,16 +594,18 @@ export interface PolicyAuditEntry {
   id: string
   tool: string
   policyId: string
+  /** blocked | hitl (waiting for a mod) | approved | rejected | expired | failed */
   status: string
   requestedAt: number // epoch seconds
+  resolvedAt?: number
 }
 
 export async function swyAuditPolicy(limit = 20): Promise<PolicyAuditEntry[]> {
-  const out = await runSwyProcess(['audit', 'policy', '--json'], undefined, { timeoutMs: 15_000 })
+  const out = await runSwyProcess(['audit', 'policy', '--json', '-n', String(Math.max(limit, 20))], undefined, { timeoutMs: 15_000 })
   return parseJsonl(out.stdout)
     .map((o) => {
-      const e = o as { id?: string; tool?: string; policy_id?: string; status?: string; requested_at?: number }
-      return { id: e.id ?? '', tool: e.tool ?? '', policyId: e.policy_id ?? '', status: e.status ?? '', requestedAt: e.requested_at ?? 0 }
+      const e = o as { id?: string; tool?: string; policy_id?: string; status?: string; requested_at?: number; resolved_at?: number }
+      return { id: e.id ?? '', tool: e.tool ?? '', policyId: e.policy_id ?? '', status: e.status ?? '', requestedAt: e.requested_at ?? 0, resolvedAt: e.resolved_at || undefined }
     })
     .filter((e) => e.id)
     .slice(0, limit)
